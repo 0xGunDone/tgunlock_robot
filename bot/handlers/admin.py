@@ -21,6 +21,8 @@ from bot.keyboards import (
     admin_user_actions_kb,
     admin_settings_kb,
     admin_referrals_kb,
+    admin_referrals_list_kb,
+    admin_ref_delete_confirm_kb,
     mtproxy_status_kb,
     admin_users_kb,
     admin_users_list_kb,
@@ -1110,10 +1112,11 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
                 )
             header = f"Рефералы: всего {total_cnt}, начислено {total_bonus} ₽"
             top_block = "\n".join(top_lines) if top_lines else "Нет данных"
+            codes = [link["code"] for link in links]
             await _safe_edit(
                 call,
                 header + "\n\nТоп приглашений:\n" + top_block + "\n\nСсылки:\n" + "\n".join(lines),
-                reply_markup=admin_referrals_kb(),
+                reply_markup=admin_referrals_list_kb(codes),
             )
         else:
             header = f"Рефералы: всего {total_cnt}, начислено {total_bonus} ₽"
@@ -1125,6 +1128,42 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
             )
     finally:
         await db.close()
+
+
+@router.callback_query(F.data.startswith("admin_ref_del:"))
+async def admin_ref_delete(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    code = call.data.split("admin_ref_del:", 1)[-1]
+    if not code:
+        return
+    await _safe_edit(
+        call,
+        f"Удалить ссылку `{code}`?\n"
+        "Ссылка будет выключена и исчезнет из списка.",
+        reply_markup=admin_ref_delete_confirm_kb(code),
+        parse_mode=None,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_ref_del_confirm:"))
+async def admin_ref_delete_confirm(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    code = call.data.split("admin_ref_del_confirm:", 1)[-1]
+    if not code:
+        return
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        await dao.disable_referral_link(db, code)
+    finally:
+        await db.close()
+    await _safe_edit(call, f"Ссылка `{code}` удалена.", reply_markup=admin_referrals_kb(), parse_mode=None)
 
 
 @router.callback_query(F.data == "admin:ref_create")

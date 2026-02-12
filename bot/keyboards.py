@@ -59,6 +59,23 @@ def admin_referrals_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def admin_referrals_list_kb(codes: list[str]) -> InlineKeyboardMarkup:
+    buttons = []
+    for code in codes:
+        buttons.append([InlineKeyboardButton(text=f"🗑 Удалить {code}", callback_data=f"admin_ref_del:{code}")])
+    buttons.append([InlineKeyboardButton(text="Создать ссылку", callback_data="admin:ref_create")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_ref_delete_confirm_kb(code: str) -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="✅ Удалить", callback_data=f"admin_ref_del_confirm:{code}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:referrals")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def admin_user_actions_kb(user_id: int, blocked: bool) -> InlineKeyboardMarkup:
     block_label = "Разблок" if blocked else "Блок"
     buttons = [
