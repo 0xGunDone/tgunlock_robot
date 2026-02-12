@@ -654,6 +654,7 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
         links = await dao.list_referral_links(db)
         if links:
             lines = []
+            bot_info = await call.bot.get_me()
             for link in links:
                 cur = await db.execute(
                     "SELECT COUNT(*) AS cnt, COALESCE(SUM(bonus_inviter + bonus_invited), 0) AS total "
@@ -663,8 +664,10 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
                 stats = await cur.fetchone()
                 uses = int(stats["cnt"])
                 total_bonus = int(stats["total"])
+                url = f"https://t.me/{bot_info.username}?start=ref_{link['code']}"
                 lines.append(
-                    f"{link['code']} owner={link['owner_user_id'] or 0} "
+                    f"{link['code']} — {url}\n"
+                    f"owner={link['owner_user_id'] or 0} "
                     f"bonus({link['bonus_inviter']}/{link['bonus_invited']}) "
                     f"limit({link['limit_total'] or 0}/{link['limit_per_user'] or 0}) "
                     f"uses={uses} total_bonus={total_bonus}₽"
