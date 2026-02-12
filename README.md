@@ -65,6 +65,8 @@ PROXY_CMD_PREFIX=sudo
 6. `ref_bonus_inviter = 10` — бонус пригласившему.
 7. `referral_enabled = 1` — включение рефералки (0 = выкл).
 8. `stars_rate = 1` — курс Stars к рублю (1 Star = 1 ₽).
+9. `stars_buy_url = ""` — ссылка где купить Stars (если нужна подсказка).
+10. `stars_buy_hint_enabled = 0` — показывать подсказку где купить Stars (0/1).
 
 ## Админка: изменение настроек
 

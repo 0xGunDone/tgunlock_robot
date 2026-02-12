@@ -97,9 +97,13 @@ def admin_settings_kb() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="Лимит прокси", callback_data="admin_settings:max_active_proxies"),
+            InlineKeyboardButton(text="Referral on/off", callback_data="admin_settings:referral_enabled"),
         ],
         [
-            InlineKeyboardButton(text="Referral on/off", callback_data="admin_settings:referral_enabled"),
+            InlineKeyboardButton(text="Ссылка Stars", callback_data="admin_settings:stars_buy_url"),
+            InlineKeyboardButton(text="Показ Stars", callback_data="admin_settings:stars_buy_hint_enabled"),
+        ],
+        [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin"),
         ],
     ]

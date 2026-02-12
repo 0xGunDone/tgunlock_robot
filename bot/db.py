@@ -9,6 +9,8 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "proxy_day_price": "10",
     "free_credit": "50",
     "stars_rate": "1",
+    "stars_buy_url": "",
+    "stars_buy_hint_enabled": "0",
     "ref_bonus_inviter": "10",
     "ref_bonus_invited": "10",
     "max_active_proxies": "10",

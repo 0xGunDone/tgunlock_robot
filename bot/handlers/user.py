@@ -489,8 +489,13 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
         if not user:
             await _safe_edit(call, "Нажмите /start")
             return
+        hint_enabled = await get_bool_setting(db, "stars_buy_hint_enabled", False)
+        stars_url = await dao.get_setting(db, "stars_buy_url", "") or ""
+        hint = ""
+        if hint_enabled and stars_url:
+            hint = f"\n\nГде купить Stars:\n{stars_url}"
         await state.set_state(UserStates.waiting_topup_amount)
-        await _safe_edit(call, f"{header}\n\nВведите сумму пополнения в рублях (целое число).")
+        await _safe_edit(call, f"{header}\n\nВведите сумму пополнения в рублях (целое число).{hint}")
     finally:
         await db.close()
 

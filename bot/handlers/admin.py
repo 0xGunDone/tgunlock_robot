@@ -815,7 +815,10 @@ async def admin_ref_limit_per_user(message: Message, state: FSMContext) -> None:
             limit_total=None if limit_total == 0 else limit_total,
             limit_per_user=None if val == 0 else val,
         )
+        bot_info = await message.bot.get_me()
+        link = f"https://t.me/{bot_info.username}?start=ref_{code}"
         await message.answer("Ссылка создана.")
+        await message.answer(f"Ссылка для распространения:\n{link}")
         await state.clear()
     finally:
         await db.close()
