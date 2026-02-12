@@ -27,6 +27,8 @@ class Config:
     proxy_cmd_prefix: str | None
     broadcast_delay_ms: int
     billing_interval_sec: int
+    mtproxy_secrets_file: str
+    mtproxy_service: str | None
 
 
 def _parse_int_list(value: str) -> List[int]:
@@ -68,4 +70,6 @@ def load_config() -> Config:
         proxy_cmd_prefix=os.getenv("PROXY_CMD_PREFIX", "").strip() or None,
         broadcast_delay_ms=int(os.getenv("BROADCAST_DELAY_MS", "50")),
         billing_interval_sec=int(os.getenv("BILLING_INTERVAL_SEC", "3600")),
+        mtproxy_secrets_file=os.getenv("MTPROXY_SECRETS_FILE", "data/mtproxy_secrets.txt"),
+        mtproxy_service=os.getenv("MTPROXY_SERVICE", "mtproxy.service").strip() or None,
     )

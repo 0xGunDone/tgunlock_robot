@@ -71,7 +71,42 @@ PROXY_CMD_PREFIX=sudo
 12. `mtproto_enabled = 0` — показывать MTProto ссылку (0/1).
 13. `mtproto_host = ""` — хост MTProto (если пусто, используется `PROXY_DEFAULT_IP`).
 14. `mtproto_port = 9443` — порт MTProto.
-15. `mtproto_secret = ""` — общий secret MTProto.
+
+`mtproto_secret` больше не настраивается вручную — секрет создаётся автоматически для каждого прокси.
+
+## MTProto (персональные секреты)
+
+Для контроля доступа у каждого прокси свой secret. Бот хранит их в файле и перезапускает MTProxy,
+когда список секретов меняется (создание/удаление/блокировка прокси).
+Для этого сервис бота должен иметь права на `systemctl restart mtproxy.service`.
+
+Опциональные переменные окружения:
+- `MTPROXY_SECRETS_FILE` — путь к файлу секретов (по умолчанию `data/mtproxy_secrets.txt`).
+- `MTPROXY_SERVICE` — имя systemd‑сервиса MTProxy (по умолчанию `mtproxy.service`).
+
+Пример wrapper‑скрипта (используется в systemd unit):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+SECRETS_FILE="${MTPROXY_SECRETS_FILE:-/storage/tgunlock_robot/data/mtproxy_secrets.txt}"
+PORT="${MTPROXY_PORT:-9443}"
+ARGS=()
+if [[ -f "$SECRETS_FILE" ]]; then
+  while IFS= read -r secret; do
+    secret="$(echo -n "$secret" | tr -d '[:space:]')"
+    [[ -z "$secret" ]] && continue
+    ARGS+=("-S" "$secret")
+  done < "$SECRETS_FILE"
+fi
+exec /opt/MTProxy/objs/bin/mtproto-proxy -u nobody -p 8888 -H "$PORT" "${ARGS[@]}" --aes-pwd /opt/MTProxy/proxy-secret /opt/MTProxy/proxy-multi.conf -M 1
+```
+
+Важно: `mtproto_port` в админке и порт в systemd должны совпадать.
+
+Готовые файлы в репозитории:
+- `scripts/mtproxy_start.sh`
+- `mtproxy.service` (проверьте пути и `MTPROXY_PORT`)
 
 ## Админка: изменение настроек
 

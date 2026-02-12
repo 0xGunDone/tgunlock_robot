@@ -15,7 +15,6 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "mtproto_enabled": "0",
     "mtproto_host": "",
     "mtproto_port": "9443",
-    "mtproto_secret": "",
     "ref_bonus_inviter": "10",
     "ref_bonus_invited": "10",
     "max_active_proxies": "10",
@@ -59,6 +58,7 @@ async def init_db(db: aiosqlite.Connection) -> None:
             port INTEGER NOT NULL,
             status TEXT NOT NULL,
             is_free INTEGER NOT NULL DEFAULT 0,
+            mtproto_secret TEXT,
             created_at TEXT NOT NULL,
             last_billed_at TEXT,
             deleted_at TEXT,
@@ -123,9 +123,23 @@ async def init_db(db: aiosqlite.Connection) -> None:
         """
     )
     await db.commit()
+    await _ensure_column(db, "proxies", "mtproto_secret", "mtproto_secret TEXT")
+
+
+async def _ensure_column(
+    db: aiosqlite.Connection, table: str, column: str, ddl: str
+) -> None:
+    cur = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cur.fetchall()
+    cols = {row["name"] for row in rows}
+    if column in cols:
+        return
+    await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+    await db.commit()
 
 
 async def ensure_default_settings(db: aiosqlite.Connection) -> None:
+    await db.execute("DELETE FROM settings WHERE key = 'mtproto_secret'")
     for key, value in DEFAULT_SETTINGS.items():
         await db.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",

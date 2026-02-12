@@ -112,9 +112,6 @@ def admin_settings_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="MTProto port", callback_data="admin_settings:mtproto_port"),
         ],
         [
-            InlineKeyboardButton(text="MTProto secret", callback_data="admin_settings:mtproto_secret"),
-        ],
-        [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin"),
         ],
     ]

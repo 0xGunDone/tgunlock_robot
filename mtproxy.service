@@ -1,0 +1,16 @@
+[Unit]
+Description=MTProxy (Telegram MTProto)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/storage/tgunlock_robot
+Environment=MTPROXY_SECRETS_FILE=/storage/tgunlock_robot/data/mtproxy_secrets.txt
+Environment=MTPROXY_PORT=9443
+ExecStart=/storage/tgunlock_robot/scripts/mtproxy_start.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

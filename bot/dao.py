@@ -132,11 +132,14 @@ async def create_proxy(
     port: int,
     status: str,
     is_free: int,
+    mtproto_secret: Optional[str] = None,
 ) -> int:
     cur = await db.execute(
         """
-        INSERT INTO proxies (user_id, login, password, ip, port, status, is_free, created_at, last_billed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO proxies (
+            user_id, login, password, ip, port, status, is_free, mtproto_secret, created_at, last_billed_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -146,6 +149,7 @@ async def create_proxy(
             port,
             status,
             is_free,
+            mtproto_secret,
             now_iso(),
             now_iso(),
         ),
@@ -162,6 +166,13 @@ async def list_proxies_by_user(db: aiosqlite.Connection, user_id: int) -> List[a
     return await cur.fetchall()
 
 
+async def list_active_proxies(db: aiosqlite.Connection) -> List[aiosqlite.Row]:
+    cur = await db.execute(
+        "SELECT * FROM proxies WHERE status = 'active' AND deleted_at IS NULL"
+    )
+    return await cur.fetchall()
+
+
 async def get_proxy_by_id(db: aiosqlite.Connection, proxy_id: int) -> Optional[aiosqlite.Row]:
     cur = await db.execute("SELECT * FROM proxies WHERE id = ?", (proxy_id,))
     return await cur.fetchone()
@@ -169,6 +180,11 @@ async def get_proxy_by_id(db: aiosqlite.Connection, proxy_id: int) -> Optional[a
 
 async def update_proxy_password(db: aiosqlite.Connection, proxy_id: int, new_password: str) -> None:
     await db.execute("UPDATE proxies SET password = ? WHERE id = ?", (new_password, proxy_id))
+    await db.commit()
+
+
+async def update_proxy_mtproto_secret(db: aiosqlite.Connection, proxy_id: int, secret: str) -> None:
+    await db.execute("UPDATE proxies SET mtproto_secret = ? WHERE id = ?", (secret, proxy_id))
     await db.commit()
 
 

@@ -13,6 +13,7 @@ from bot.handlers import routers
 from bot.runtime import runtime
 from bot.services.proxy_provider import MockProxyProvider, CommandProxyProvider, DantedPamProxyProvider
 from bot.services.billing import run_billing_once
+from bot.services.mtproto import sync_mtproto_secrets
 
 config = load_config()
 
@@ -73,6 +74,7 @@ async def on_startup() -> None:
     try:
         await init_db(db)
         await ensure_default_settings(db)
+        await sync_mtproto_secrets(db)
     finally:
         await db.close()
 
@@ -142,7 +144,9 @@ async def billing_loop() -> None:
         try:
             provider = runtime.proxy_provider
             if provider:
-                await run_billing_once(db, provider)
+                changed = await run_billing_once(db, provider)
+                if changed:
+                    await sync_mtproto_secrets(db)
         finally:
             await db.close()
         await asyncio.sleep(config.billing_interval_sec)

@@ -19,13 +19,14 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
         return None
 
 
-async def run_billing_once(db: aiosqlite.Connection, provider: ProxyProvider) -> None:
+async def run_billing_once(db: aiosqlite.Connection, provider: ProxyProvider) -> bool:
     day_price = await get_int_setting(db, "proxy_day_price", 0)
     if day_price <= 0:
-        return
+        return False
 
     today = datetime.utcnow().date()
     proxies = await dao.get_active_proxies_for_billing(db)
+    changed = False
     for proxy in proxies:
         user_balance = int(proxy["user_balance"])
         user_blocked = proxy["user_blocked"] is not None
@@ -34,6 +35,7 @@ async def run_billing_once(db: aiosqlite.Connection, provider: ProxyProvider) ->
         if user_deleted or user_blocked:
             await provider.disable_proxy(proxy["login"])
             await dao.set_proxy_status(db, proxy["id"], "disabled")
+            changed = True
             continue
 
         last_billed = _parse_date(proxy["last_billed_at"])
@@ -47,3 +49,5 @@ async def run_billing_once(db: aiosqlite.Connection, provider: ProxyProvider) ->
             await provider.disable_proxy(proxy["login"])
             await dao.set_proxy_status(db, proxy["id"], "disabled")
             await dao.update_proxy_last_billed(db, proxy["id"])
+            changed = True
+    return changed

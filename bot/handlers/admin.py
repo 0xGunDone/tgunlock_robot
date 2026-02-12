@@ -15,6 +15,7 @@ from bot.db import get_db
 from bot.handlers.states import AdminStates
 from bot.keyboards import admin_menu_inline_kb, main_menu_inline_kb, broadcast_filters_kb, admin_user_actions_kb, admin_settings_kb, admin_referrals_kb
 from bot.runtime import runtime
+from bot.services.mtproto import sync_mtproto_secrets
 
 router = Router()
 
@@ -218,6 +219,7 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
                     except Exception:
                         continue
             await dao.delete_user(db, user_id)
+            await sync_mtproto_secrets(db)
             await message.answer("Пользователь удалён.")
             return
 
@@ -285,6 +287,7 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
                     except Exception:
                         continue
             await dao.delete_user(db, user_id)
+            await sync_mtproto_secrets(db)
         elif action == "refresh":
             pass
 
@@ -472,6 +475,8 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
     db = await get_db(config.db_path)
     try:
         await dao.set_setting(db, key, value)
+        if key == "mtproto_enabled":
+            await sync_mtproto_secrets(db)
         await message.answer("Настройка обновлена.")
         await state.clear()
     finally:

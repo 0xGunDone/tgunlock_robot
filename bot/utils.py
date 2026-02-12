@@ -20,6 +20,10 @@ def generate_ref_code(length: int = 8) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def generate_mtproto_secret() -> str:
+    return secrets.token_hex(16)
+
+
 def build_proxy_link(ip: str, port: int, login: str, password: str) -> str:
     return f"https://t.me/socks?server={ip}&port={port}&user={login}&pass={password}"
 

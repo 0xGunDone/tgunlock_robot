@@ -17,10 +17,12 @@ from bot.services.settings import (
     get_bool_setting,
     convert_rub_to_stars,
 )
+from bot.services.mtproto import sync_mtproto_secrets
 from bot.utils import (
     generate_login,
     generate_password,
     generate_ref_code,
+    generate_mtproto_secret,
     build_proxy_link,
     extract_ref_code,
 )
@@ -96,8 +98,9 @@ async def _create_proxy_for_user(db, user_id: int, is_free: int) -> dict:
 
     login = _normalize_login(generate_login(), "tgunlockrobot_")
     password = generate_password()
+    mtproto_secret = generate_mtproto_secret()
     ip, port = await provider.create_proxy(login, password)
-    await dao.create_proxy(
+    proxy_id = await dao.create_proxy(
         db,
         user_id=user_id,
         login=login,
@@ -106,8 +109,9 @@ async def _create_proxy_for_user(db, user_id: int, is_free: int) -> dict:
         port=port,
         status="active",
         is_free=is_free,
+        mtproto_secret=mtproto_secret,
     )
-    return {"login": login, "password": password, "ip": ip, "port": port}
+    return {"id": proxy_id, "login": login, "password": password, "ip": ip, "port": port, "mtproto_secret": mtproto_secret}
 
 
 async def _delete_proxy_login(provider, login: str) -> None:
@@ -181,7 +185,13 @@ async def _build_proxy_links_text(db, proxy) -> str:
     if mtproto_enabled:
         host = (await dao.get_setting(db, "mtproto_host", "")) or runtime.config.proxy_default_ip
         port = await dao.get_setting(db, "mtproto_port", "9443") or "9443"
-        secret = await dao.get_setting(db, "mtproto_secret", "") or ""
+        if isinstance(proxy, dict):
+            secret = proxy.get("mtproto_secret", "") or ""
+        else:
+            try:
+                secret = proxy["mtproto_secret"] or ""
+            except Exception:
+                secret = ""
         if secret:
             mt_link = f"https://t.me/proxy?server={host}&port={port}&secret={secret}"
             lines.append(f"MTProto:\n{mt_link}")
@@ -204,6 +214,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         user = await dao.get_user_by_tg_id_any(db, message.from_user.id)
         if user and user["deleted_at"]:
             await dao.delete_user(db, user["id"])
+            await sync_mtproto_secrets(db)
             user = None
 
         if user:
@@ -240,6 +251,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
         try:
             proxy = await _create_proxy_for_user(db, user_id, is_free=1)
+            await sync_mtproto_secrets(db)
             links_text = await _build_proxy_links_text(db, proxy)
             user_row, header = await _get_user_and_header(db, message.from_user.id)
             prefix = f"{header}\n\n" if header else ""
@@ -394,6 +406,7 @@ async def proxy_buy_cb(call: CallbackQuery) -> None:
 
         await dao.add_user_balance(db, user["id"], -price)
         proxy = await _create_proxy_for_user(db, user["id"], is_free=0)
+        await sync_mtproto_secrets(db)
         links_text = await _build_proxy_links_text(db, proxy)
         active = await dao.count_active_proxies(db, user_id=user["id"])
         header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
@@ -482,6 +495,7 @@ async def proxy_delete_apply(call: CallbackQuery) -> None:
             return
         await _delete_proxy_login(provider, proxy["login"])
         await dao.mark_proxy_deleted(db, proxy_id)
+        await sync_mtproto_secrets(db)
         await my_proxies(call)
     finally:
         await db.close()
