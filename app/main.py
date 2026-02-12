@@ -11,14 +11,20 @@ from bot.config import load_config
 from bot.db import get_db, init_db, ensure_default_settings
 from bot.handlers import routers
 from bot.runtime import runtime
-from bot.services.proxy_provider import MockProxyProvider, CommandProxyProvider
+from bot.services.proxy_provider import MockProxyProvider, CommandProxyProvider, DantedPamProxyProvider
 from bot.services.billing import run_billing_once
 
 config = load_config()
 
 runtime.config = config
 
-if config.proxy_provider == "command" and (
+if config.proxy_provider == "danted":
+    runtime.proxy_provider = DantedPamProxyProvider(
+        default_ip=config.proxy_default_ip,
+        default_port=config.proxy_default_port,
+        cmd_prefix=config.proxy_cmd_prefix,
+    )
+elif config.proxy_provider == "command" and (
     config.proxy_cmd_create and config.proxy_cmd_update_password and config.proxy_cmd_disable
 ):
     runtime.proxy_provider = CommandProxyProvider(
@@ -41,6 +47,21 @@ bot = Bot(token=config.bot_token)
 dp = Dispatcher()
 for router in routers:
     dp.include_router(router)
+
+def _normalize_prefix(prefix: str) -> str:
+    prefix = prefix.strip()
+    if not prefix:
+        return ""
+    if not prefix.startswith("/"):
+        prefix = "/" + prefix
+    if prefix != "/" and prefix.endswith("/"):
+        prefix = prefix[:-1]
+    return prefix
+
+
+APP_PREFIX = _normalize_prefix(config.app_prefix)
+WEBHOOK_PATH = f"{APP_PREFIX}/webhook" if APP_PREFIX else "/webhook"
+HEALTH_PATH = f"{APP_PREFIX}/health" if APP_PREFIX else "/health"
 
 app = FastAPI()
 
@@ -69,7 +90,7 @@ async def on_shutdown() -> None:
     await bot.session.close()
 
 
-@app.post("/webhook")
+@app.post(WEBHOOK_PATH)
 async def webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(None),
@@ -93,7 +114,7 @@ async def webhook(
     return Response(status_code=200)
 
 
-@app.get("/health")
+@app.get(HEALTH_PATH)
 async def health() -> dict:
     return {"ok": True}
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram SOCKS5 Proxy Bot (tgunlock_robot)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/Users/mihailsizov/projects/tgunlock_robot
+EnvironmentFile=/Users/mihailsizov/projects/tgunlock_robot/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8051
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

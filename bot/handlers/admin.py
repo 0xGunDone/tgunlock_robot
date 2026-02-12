@@ -539,6 +539,10 @@ async def admin_referral_create(message: Message, state: FSMContext) -> None:
         return
     db = await get_db(config.db_path)
     try:
+        existing_user_code = await dao.get_user_by_ref_code(db, code)
+        if existing_user_code:
+            await message.answer("Код уже используется пользователем.")
+            return
         owner_tg_id_int = int(owner_tg_id)
         owner_user_id = None
         if owner_tg_id_int != 0:

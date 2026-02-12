@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Protocol, Tuple
+import shlex
 
 
 class ProxyProvider(Protocol):
@@ -66,3 +67,49 @@ class CommandProxyProvider:
     async def disable_proxy(self, login: str) -> None:
         cmd = self.cmd_disable.format(login=login)
         await self._run(cmd)
+
+
+@dataclass
+class DantedPamProxyProvider:
+    default_ip: str
+    default_port: int
+    cmd_prefix: str | None = None
+
+    def _build_cmd(self, args: list[str]) -> list[str]:
+        if self.cmd_prefix:
+            return shlex.split(self.cmd_prefix) + args
+        return args
+
+    async def _run(self, args: list[str], input_text: str | None = None, check: bool = True):
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE if input_text else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate(input_text.encode() if input_text else None)
+        if check and proc.returncode != 0:
+            raise RuntimeError(stderr.decode().strip() or "Command failed")
+        return proc.returncode, stdout.decode().strip(), stderr.decode().strip()
+
+    async def _user_exists(self, login: str) -> bool:
+        cmd = self._build_cmd(["getent", "passwd", login])
+        code, _, _ = await self._run(cmd, check=False)
+        return code == 0
+
+    async def create_proxy(self, login: str, password: str) -> Tuple[str, int]:
+        if await self._user_exists(login):
+            raise RuntimeError("User already exists")
+        cmd = self._build_cmd(["useradd", "--no-create-home", "--shell", "/usr/sbin/nologin", login])
+        await self._run(cmd)
+        cmd = self._build_cmd(["chpasswd"])
+        await self._run(cmd, input_text=f"{login}:{password}\n")
+        return self.default_ip, self.default_port
+
+    async def update_password(self, login: str, new_password: str) -> None:
+        cmd = self._build_cmd(["chpasswd"])
+        await self._run(cmd, input_text=f"{login}:{new_password}\n")
+
+    async def disable_proxy(self, login: str) -> None:
+        cmd = self._build_cmd(["usermod", "-L", login])
+        await self._run(cmd, check=False)

@@ -130,10 +130,22 @@ async def create_proxy(
 ) -> int:
     cur = await db.execute(
         """
-        INSERT INTO proxies (user_id, login, password, ip, port, status, is_free, device_limit, device_count, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO proxies (user_id, login, password, ip, port, status, is_free, device_limit, device_count, created_at, last_billed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (user_id, login, password, ip, port, status, is_free, device_limit, device_count, now_iso()),
+        (
+            user_id,
+            login,
+            password,
+            ip,
+            port,
+            status,
+            is_free,
+            device_limit,
+            device_count,
+            now_iso(),
+            now_iso(),
+        ),
     )
     await db.commit()
     return cur.lastrowid
@@ -221,6 +233,11 @@ async def update_payment_status(
         "UPDATE payments SET status = ?, provider_payment_id = ? WHERE id = ?",
         (status, provider_payment_id, payment_id),
     )
+    await db.commit()
+
+
+async def update_payment_payload(db: aiosqlite.Connection, payment_id: int, payload: str) -> None:
+    await db.execute("UPDATE payments SET payload = ? WHERE id = ?", (payload, payment_id))
     await db.commit()
 
 

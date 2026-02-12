@@ -448,6 +448,7 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
         payload = f"topup:{user['id']}:{rub}:{stars}"
         payment_id = await dao.create_payment(db, user_id=user["id"], amount=rub, status="pending", payload=payload)
         payload = f"{payload}:{payment_id}"
+        await dao.update_payment_payload(db, payment_id, payload)
 
         prices = [LabeledPrice(label="Пополнение баланса", amount=stars)]
         await message.answer_invoice(

@@ -106,6 +106,7 @@ async def init_db(db: aiosqlite.Connection) -> None:
         );
 
         CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code);
         CREATE INDEX IF NOT EXISTS idx_proxies_user_id ON proxies(user_id);
         CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id);
         CREATE INDEX IF NOT EXISTS idx_referral_events_inviter ON referral_events(inviter_user_id);
