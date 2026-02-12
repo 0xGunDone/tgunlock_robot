@@ -36,6 +36,21 @@ async def _ensure_unique_ref_code(db, length: int = 8) -> str:
             return code
 
 
+def _get_start_args(message: Message) -> str | None:
+    text = message.text or ""
+    if not text:
+        return None
+    parts = text.split(maxsplit=1)
+    if not parts:
+        return None
+    cmd = parts[0].lower()
+    if not (cmd == "/start" or cmd.startswith("/start@")):
+        return None
+    if len(parts) == 1:
+        return None
+    return parts[1].strip() or None
+
+
 async def _create_proxy_for_user(db, user_id: int, is_free: int) -> dict:
     provider = runtime.proxy_provider
     if provider is None:
@@ -83,7 +98,7 @@ async def cmd_start(message: Message) -> None:
             await message.answer("Главное меню", reply_markup=main_menu_kb())
             return
 
-        ref_arg = extract_ref_code(message.get_args())
+        ref_arg = extract_ref_code(_get_start_args(message))
         referral_enabled = await get_bool_setting(db, "referral_enabled", True)
         free_credit = await get_int_setting(db, "free_credit", 0)
 
