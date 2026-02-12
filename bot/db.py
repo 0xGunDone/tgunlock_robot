@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import aiosqlite
+import os
 from typing import Any, Dict
 
 DEFAULT_SETTINGS: Dict[str, str] = {
@@ -17,6 +18,9 @@ DEFAULT_SETTINGS: Dict[str, str] = {
 
 
 async def get_db(db_path: str) -> aiosqlite.Connection:
+    dir_name = os.path.dirname(db_path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
     db = await aiosqlite.connect(db_path)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA foreign_keys = ON;")
