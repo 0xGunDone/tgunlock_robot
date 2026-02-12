@@ -8,7 +8,7 @@ from aiogram.types import Message, CallbackQuery, LabeledPrice
 from bot import dao
 from bot.db import get_db
 from bot.handlers.states import UserStates
-from bot.keyboards import main_menu_kb, proxy_actions_kb, proxies_select_kb
+from bot.keyboards import main_menu_inline_kb, proxy_actions_kb, proxies_select_kb
 from bot.runtime import runtime
 from bot.services.settings import (
     get_int_setting,
@@ -49,6 +49,13 @@ def _get_start_args(message: Message) -> str | None:
     if len(parts) == 1:
         return None
     return parts[1].strip() or None
+
+
+async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None) -> None:
+    try:
+        await call.message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await call.message.answer(text, reply_markup=reply_markup)
 
 
 async def _create_proxy_for_user(db, user_id: int, is_free: int) -> dict:
@@ -95,7 +102,7 @@ async def cmd_start(message: Message) -> None:
             )
             await db.commit()
             await dao.update_user_last_seen(db, message.from_user.id)
-            await message.answer("Главное меню", reply_markup=main_menu_kb())
+            await message.answer("Главное меню", reply_markup=main_menu_inline_kb())
             return
 
         ref_arg = extract_ref_code(_get_start_args(message))
@@ -168,63 +175,86 @@ async def cmd_start(message: Message) -> None:
                 "Нажмите на ссылку → Telegram откроет настройки прокси → Добавьте прокси → "
                 "Включайте и выключайте в настройках Telegram.\n\n"
                 f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
-                reply_markup=main_menu_kb(),
+                reply_markup=main_menu_inline_kb(),
             )
         except Exception:
             await message.answer(
                 "Сервис временно недоступен. Попробуйте позже.",
-                reply_markup=main_menu_kb(),
+                reply_markup=main_menu_inline_kb(),
             )
     finally:
         await db.close()
 
 
+@router.callback_query(F.data == "menu:main")
+async def menu_main(call: CallbackQuery) -> None:
+    await call.answer()
+    await _safe_edit(call, "Главное меню", reply_markup=main_menu_inline_kb())
+
+
 @router.message(Command("help"))
-@router.message(F.text == "❓ Помощь")
 async def cmd_help(message: Message) -> None:
     await message.answer(
         "Инструкция:\n"
         "1) Нажмите на ссылку прокси.\n"
         "2) Telegram откроет настройки прокси.\n"
         "3) Добавьте прокси и включайте/выключайте в настройках Telegram.\n\n"
-        "Если ссылка не открывается — введите данные вручную (IP, порт, логин, пароль)."
+        "Если ссылка не открывается — введите данные вручную (IP, порт, логин, пароль).",
+        reply_markup=main_menu_inline_kb(),
     )
 
 
-@router.message(F.text == "💰 Баланс")
-async def show_balance(message: Message) -> None:
+@router.callback_query(F.data == "menu:help")
+async def menu_help(call: CallbackQuery) -> None:
+    await call.answer()
+    await _safe_edit(
+        call,
+        "Инструкция:\n"
+        "1) Нажмите на ссылку прокси.\n"
+        "2) Telegram откроет настройки прокси.\n"
+        "3) Добавьте прокси и включайте/выключайте в настройках Telegram.\n\n"
+        "Если ссылка не открывается — введите данные вручную (IP, порт, логин, пароль).",
+        reply_markup=main_menu_inline_kb(),
+    )
+
+
+@router.callback_query(F.data == "menu:balance")
+async def show_balance(call: CallbackQuery) -> None:
+    await call.answer()
     config = runtime.config
     if config is None:
         return
     db = await get_db(config.db_path)
     try:
-        user = await dao.get_user_by_tg_id(db, message.from_user.id)
+        user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await message.answer("Нажмите /start")
+            await call.message.answer("Нажмите /start")
             return
         active = await dao.count_active_proxies(db, user_id=user["id"])
-        await message.answer(
+        await _safe_edit(
+            call,
             f"Баланс: {user['balance']} ₽\nАктивных прокси: {active}",
-            reply_markup=main_menu_kb(),
+            reply_markup=main_menu_inline_kb(),
         )
     finally:
         await db.close()
 
 
-@router.message(F.text == "🧦 Мои прокси")
-async def my_proxies(message: Message) -> None:
+@router.callback_query(F.data == "menu:proxies")
+async def my_proxies(call: CallbackQuery) -> None:
+    await call.answer()
     config = runtime.config
     if config is None:
         return
     db = await get_db(config.db_path)
     try:
-        user = await dao.get_user_by_tg_id(db, message.from_user.id)
+        user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await message.answer("Нажмите /start")
+            await call.message.answer("Нажмите /start")
             return
         proxies = await dao.list_proxies_by_user(db, user["id"])
         if not proxies:
-            await message.answer("У вас пока нет прокси.", reply_markup=proxy_actions_kb())
+            await _safe_edit(call, "У вас пока нет прокси.", reply_markup=proxy_actions_kb())
             return
 
         lines = []
@@ -234,7 +264,7 @@ async def my_proxies(message: Message) -> None:
                 f"{p['ip']}:{p['port']}\n"
                 f"Статус: {p['status']}\n"
             )
-        await message.answer("\n".join(lines), reply_markup=proxy_actions_kb())
+        await _safe_edit(call, "\n".join(lines), reply_markup=proxy_actions_kb())
     finally:
         await db.close()
 
@@ -242,7 +272,7 @@ async def my_proxies(message: Message) -> None:
 @router.callback_query(F.data == "proxy:list")
 async def proxy_list_cb(call: CallbackQuery) -> None:
     await call.answer()
-    await my_proxies(call.message)
+    await my_proxies(call)
 
 
 @router.callback_query(F.data == "proxy:buy")
@@ -396,45 +426,51 @@ async def proxy_delete_apply(call: CallbackQuery) -> None:
         await db.close()
 
 
-@router.message(F.text == "🖥 Устройства")
-async def devices_info(message: Message) -> None:
+@router.callback_query(F.data == "menu:devices")
+async def devices_info(call: CallbackQuery) -> None:
+    await call.answer()
     config = runtime.config
     if config is None:
         return
     db = await get_db(config.db_path)
     try:
         device_limit = await get_int_setting(db, "device_limit", 0)
-        await message.answer(
+        await _safe_edit(
+            call,
             f"Лимит устройств: {device_limit if device_limit > 0 else 'не задан'}",
-            reply_markup=main_menu_kb(),
+            reply_markup=main_menu_inline_kb(),
         )
     finally:
         await db.close()
 
 
-@router.message(F.text == "🤝 Рефералы")
-async def referral_info(message: Message) -> None:
+@router.callback_query(F.data == "menu:referrals")
+async def referral_info(call: CallbackQuery) -> None:
+    await call.answer()
     config = runtime.config
     if config is None:
         return
     db = await get_db(config.db_path)
     try:
-        user = await dao.get_user_by_tg_id(db, message.from_user.id)
+        user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await message.answer("Нажмите /start")
+            await call.message.answer("Нажмите /start")
             return
-        await message.answer(
+        await _safe_edit(
+            call,
             "Ваша реферальная ссылка:\n"
-            f"https://t.me/{(await message.bot.get_me()).username}?start=ref_{user['ref_code']}"
+            f"https://t.me/{(await call.bot.get_me()).username}?start=ref_{user['ref_code']}",
+            reply_markup=main_menu_inline_kb(),
         )
     finally:
         await db.close()
 
 
-@router.message(F.text == "⭐ Пополнить")
-async def topup_start(message: Message, state: FSMContext) -> None:
+@router.callback_query(F.data == "menu:topup")
+async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
     await state.set_state(UserStates.waiting_topup_amount)
-    await message.answer("Введите сумму пополнения в рублях (целое число).")
+    await call.message.answer("Введите сумму пополнения в рублях (целое число).")
 
 
 @router.message(UserStates.waiting_topup_amount)

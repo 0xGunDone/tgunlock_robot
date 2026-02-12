@@ -13,7 +13,7 @@ from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from bot import dao
 from bot.db import get_db
 from bot.handlers.states import AdminStates
-from bot.keyboards import admin_menu_kb, main_menu_kb, broadcast_filters_kb
+from bot.keyboards import admin_menu_inline_kb, main_menu_inline_kb, broadcast_filters_kb
 from bot.runtime import runtime
 
 router = Router()
@@ -32,24 +32,25 @@ def _require_admin(message: Message) -> bool:
     return True
 
 
+async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None) -> None:
+    try:
+        await call.message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await call.message.answer(text, reply_markup=reply_markup)
+
+
 @router.message(Command("admin"))
 async def admin_start(message: Message) -> None:
     if not _require_admin(message):
         return
-    await message.answer("Админка", reply_markup=admin_menu_kb())
+    await message.answer("Админка", reply_markup=admin_menu_inline_kb())
 
 
-@router.message(F.text == "⬅️ Назад")
-async def admin_back(message: Message) -> None:
-    if not _require_admin(message):
+@router.callback_query(F.data == "admin:stats")
+async def admin_stats(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
         return
-    await message.answer("Главное меню", reply_markup=main_menu_kb())
-
-
-@router.message(F.text == "📊 Статистика")
-async def admin_stats(message: Message) -> None:
-    if not _require_admin(message):
-        return
+    await call.answer()
 
     config = runtime.config
     if config is None:
@@ -81,25 +82,28 @@ async def admin_stats(message: Message) -> None:
         row = await cur.fetchone()
         disabled_count = int(row["cnt"])
 
-        await message.answer(
+        await _safe_edit(
+            call,
             "Статистика:\n"
             f"Всего пользователей: {total_users}\n"
             f"Активные за 7 дней: {active_7}\n"
             f"Активных прокси: {active_proxies}\n"
             f"Отключённых прокси: {disabled_count}\n"
             f"Средний баланс: {avg_balance} ₽\n\n"
-            f"Пополнения: день {sum_day} ₽, неделя {sum_week} ₽, месяц {sum_month} ₽"
+            f"Пополнения: день {sum_day} ₽, неделя {sum_week} ₽, месяц {sum_month} ₽",
+            reply_markup=admin_menu_inline_kb(),
         )
     finally:
         await db.close()
 
 
-@router.message(F.text == "👤 Пользователи")
-async def admin_users(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
+@router.callback_query(F.data == "admin:users")
+async def admin_users(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
         return
+    await call.answer()
     await state.set_state(AdminStates.waiting_user_query)
-    await message.answer("Введите tg_id или username пользователя.")
+    await call.message.answer("Введите tg_id или username пользователя.")
 
 
 @router.message(AdminStates.waiting_user_query)
@@ -201,10 +205,11 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
         await db.close()
 
 
-@router.message(F.text == "🧦 Прокси")
-async def admin_proxies(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
+@router.callback_query(F.data == "admin:proxies")
+async def admin_proxies(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
         return
+    await call.answer()
     config = runtime.config
     if config is None:
         return
@@ -218,12 +223,14 @@ async def admin_proxies(message: Message, state: FSMContext) -> None:
             "FROM proxies"
         )
         row = await cur.fetchone()
-        await message.answer(
+        await _safe_edit(
+            call,
             "Прокси:\n"
             f"Активные: {row['active'] or 0}\n"
             f"Отключённые: {row['disabled'] or 0}\n"
             f"Удалённые: {row['deleted'] or 0}\n\n"
-            "Введите tg_id пользователя для списка его прокси."
+            "Введите tg_id пользователя для списка его прокси.",
+            reply_markup=admin_menu_inline_kb(),
         )
         await state.set_state(AdminStates.waiting_proxy_user)
     finally:
@@ -261,10 +268,11 @@ async def admin_proxies_by_user(message: Message, state: FSMContext) -> None:
         await db.close()
 
 
-@router.message(F.text == "💳 Платежи")
-async def admin_payments(message: Message) -> None:
-    if not _require_admin(message):
+@router.callback_query(F.data == "admin:payments")
+async def admin_payments(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
         return
+    await call.answer()
     config = runtime.config
     if config is None:
         return
@@ -276,21 +284,26 @@ async def admin_payments(message: Message) -> None:
         )
         rows = await cur.fetchall()
         if not rows:
-            await message.answer("Платежей нет.")
+            await _safe_edit(call, "Платежей нет.", reply_markup=admin_menu_inline_kb())
             return
         lines = [
             f"#{row['id']} user={row['user_id']} {row['amount']}₽ {row['status']} {row['created_at']}"
             for row in rows
         ]
-        await message.answer("Последние платежи:\n" + "\n".join(lines))
+        await _safe_edit(
+            call,
+            "Последние платежи:\n" + "\n".join(lines),
+            reply_markup=admin_menu_inline_kb(),
+        )
     finally:
         await db.close()
 
 
-@router.message(F.text == "⚙️ Настройки")
-async def admin_settings(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
+@router.callback_query(F.data == "admin:settings")
+async def admin_settings(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
         return
+    await call.answer()
 
     config = runtime.config
     if config is None:
@@ -300,8 +313,12 @@ async def admin_settings(message: Message, state: FSMContext) -> None:
     try:
         settings_map = await dao.get_settings_map(db)
         lines = [f"{k} = {v}" for k, v in sorted(settings_map.items())]
-        await message.answer("Текущие настройки:\n" + "\n".join(lines))
-        await message.answer("Отправьте: ключ значение (например: proxy_day_price 10)")
+        await _safe_edit(
+            call,
+            "Текущие настройки:\n" + "\n".join(lines),
+            reply_markup=admin_menu_inline_kb(),
+        )
+        await call.message.answer("Отправьте: ключ значение (например: proxy_day_price 10)")
         await state.set_state(AdminStates.waiting_setting_input)
     finally:
         await db.close()
@@ -331,11 +348,13 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
         await db.close()
 
 
-@router.message(F.text == "📦 Экспорт")
-async def admin_export(message: Message) -> None:
-    if not _require_admin(message):
+@router.callback_query(F.data == "admin:export")
+async def admin_export(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
         return
-    await message.answer(
+    await call.answer()
+    await _safe_edit(
+        call,
         "Экспорт CSV: отправьте одно из слов: users, users_balances, proxies, payments, referrals"
     )
 
@@ -414,12 +433,13 @@ async def admin_export_csv(message: Message) -> None:
         await db.close()
 
 
-@router.message(F.text == "📣 Рассылка")
-async def admin_broadcast_start(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
+@router.callback_query(F.data == "admin:broadcast")
+async def admin_broadcast_start(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
         return
+    await call.answer()
     await state.set_state(AdminStates.waiting_broadcast_text)
-    await message.answer("Введите текст рассылки.")
+    await call.message.answer("Введите текст рассылки.")
 
 
 @router.message(AdminStates.waiting_broadcast_text)
@@ -491,10 +511,11 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
         await db.close()
 
 
-@router.message(F.text == "🔗 Рефералы")
-async def admin_referrals(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
+@router.callback_query(F.data == "admin:referrals")
+async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
         return
+    await call.answer()
     config = runtime.config
     if config is None:
         return
@@ -509,14 +530,14 @@ async def admin_referrals(message: Message, state: FSMContext) -> None:
                     f"bonus({link['bonus_inviter']}/{link['bonus_invited']}) "
                     f"limit({link['limit_total'] or 0}/{link['limit_per_user'] or 0})"
                 )
-            await message.answer("Ссылки:\n" + "\n".join(lines))
+            await _safe_edit(call, "Ссылки:\n" + "\n".join(lines), reply_markup=admin_menu_inline_kb())
         else:
-            await message.answer("Активных ссылок нет.")
+            await _safe_edit(call, "Активных ссылок нет.", reply_markup=admin_menu_inline_kb())
     finally:
         await db.close()
 
     await state.set_state(AdminStates.waiting_referral_link)
-    await message.answer(
+    await call.message.answer(
         "Создание ссылки: отправьте строку\n"
         "code owner_tg_id bonus_inviter bonus_invited limit_total limit_per_user\n"
         "Если owner_tg_id = 0, бонус приглашающему не начисляется. Лимиты 0 = без лимита."

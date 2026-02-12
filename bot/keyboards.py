@@ -1,38 +1,49 @@
 from __future__ import annotations
 
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-MAIN_MENU_BUTTONS = [
-    "💰 Баланс",
-    "🧦 Мои прокси",
-    "🖥 Устройства",
-    "⭐ Пополнить",
-    "🤝 Рефералы",
-    "❓ Помощь",
-]
-
-ADMIN_MENU_BUTTONS = [
-    "📊 Статистика",
-    "👤 Пользователи",
-    "🧦 Прокси",
-    "💳 Платежи",
-    "🔗 Рефералы",
-    "⚙️ Настройки",
-    "📦 Экспорт",
-    "📣 Рассылка",
-    "⬅️ Назад",
-]
+def main_menu_inline_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
+            InlineKeyboardButton(text="🧦 Мои прокси", callback_data="menu:proxies"),
+        ],
+        [
+            InlineKeyboardButton(text="🖥 Устройства", callback_data="menu:devices"),
+            InlineKeyboardButton(text="⭐ Пополнить", callback_data="menu:topup"),
+        ],
+        [
+            InlineKeyboardButton(text="🤝 Рефералы", callback_data="menu:referrals"),
+            InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def main_menu_kb() -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=btn)] for btn in MAIN_MENU_BUTTONS]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def admin_menu_kb() -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=btn)] for btn in ADMIN_MENU_BUTTONS]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+def admin_menu_inline_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats"),
+            InlineKeyboardButton(text="👤 Пользователи", callback_data="admin:users"),
+        ],
+        [
+            InlineKeyboardButton(text="🧦 Прокси", callback_data="admin:proxies"),
+            InlineKeyboardButton(text="💳 Платежи", callback_data="admin:payments"),
+        ],
+        [
+            InlineKeyboardButton(text="🔗 Рефералы", callback_data="admin:referrals"),
+            InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin:settings"),
+        ],
+        [
+            InlineKeyboardButton(text="📦 Экспорт", callback_data="admin:export"),
+            InlineKeyboardButton(text="📣 Рассылка", callback_data="admin:broadcast"),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def proxy_actions_kb() -> InlineKeyboardMarkup:
@@ -41,6 +52,7 @@ def proxy_actions_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Обновить пароль", callback_data="proxy:passwd")],
         [InlineKeyboardButton(text="Удалить прокси", callback_data="proxy:delete")],
         [InlineKeyboardButton(text="Показать список", callback_data="proxy:list")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
