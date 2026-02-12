@@ -3,7 +3,7 @@ from __future__ import annotations
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, LabeledPrice
+from aiogram.types import Message, CallbackQuery, LabeledPrice, ReplyKeyboardRemove
 
 from bot import dao
 from bot.db import get_db
@@ -96,6 +96,7 @@ async def cmd_start(message: Message) -> None:
             if user["blocked_at"]:
                 await message.answer("Ваш аккаунт заблокирован.")
                 return
+            await message.answer("Меню", reply_markup=ReplyKeyboardRemove())
             await db.execute(
                 "UPDATE users SET username = ? WHERE tg_id = ?",
                 (message.from_user.username, message.from_user.id),
