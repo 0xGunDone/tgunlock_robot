@@ -27,7 +27,10 @@ def generate_mtproto_secret() -> str:
 def extract_ref_code(start_param: str | None) -> str | None:
     if not start_param:
         return None
-    match = re.match(r"^ref[_-](\w+)$", start_param.strip())
-    if not match:
-        return None
-    return match.group(1)
+    value = start_param.strip()
+    match = re.match(r"^ref[_-](\w+)$", value)
+    if match:
+        return match.group(1)
+    if re.match(r"^[A-Za-z0-9]+$", value):
+        return value
+    return None

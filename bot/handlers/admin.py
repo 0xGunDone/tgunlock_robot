@@ -5,6 +5,7 @@ import io
 from datetime import datetime, timedelta
 import asyncio
 import os
+import re
 
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
@@ -1100,12 +1101,11 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
                 stats = await cur.fetchone()
                 uses = int(stats["cnt"])
                 total_bonus = int(stats["total"])
-                url = f"https://t.me/{bot_info.username}?start=ref_{link['code']}"
+                url = f"https://t.me/{bot_info.username}?start={link['code']}"
                 lines.append(
                     f"{link['code']} — {url}\n"
-                    f"owner={link['owner_user_id'] or 0} "
+                    f"owner={link['owner_user_id']} "
                     f"bonus({link['bonus_inviter']}/{link['bonus_invited']}) "
-                    f"limit({link['limit_total'] or 0}/{link['limit_per_user'] or 0}) "
                     f"uses={uses} total_bonus={total_bonus}₽"
                 )
             header = f"Рефералы: всего {total_cnt}, начислено {total_bonus} ₽"
@@ -1113,7 +1113,7 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
             await _safe_edit(
                 call,
                 header + "\n\nТоп приглашений:\n" + top_block + "\n\nСсылки:\n" + "\n".join(lines),
-                reply_markup=admin_menu_inline_kb(),
+                reply_markup=admin_referrals_kb(),
             )
         else:
             header = f"Рефералы: всего {total_cnt}, начислено {total_bonus} ₽"
@@ -1121,15 +1121,10 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
             await _safe_edit(
                 call,
                 header + "\n\nТоп приглашений:\n" + top_block + "\n\nАктивных ссылок нет.",
-                reply_markup=admin_menu_inline_kb(),
+                reply_markup=admin_referrals_kb(),
             )
     finally:
         await db.close()
-
-    await call.message.answer(
-        "Создание ссылки: нажмите кнопку и пройдите мастер.",
-        reply_markup=admin_referrals_kb(),
-    )
 
 
 @router.callback_query(F.data == "admin:ref_create")
@@ -1138,7 +1133,7 @@ async def admin_ref_create(call: CallbackQuery, state: FSMContext) -> None:
         return
     await call.answer()
     await state.set_state(AdminStates.ref_code)
-    await call.message.answer("Шаг 1/6. Введите код ссылки (латиница/цифры без пробелов).")
+    await call.message.answer("Шаг 1/2. Введите код ссылки (латиница/цифры без пробелов).")
 
 
 @router.message(AdminStates.ref_code)
@@ -1146,7 +1141,7 @@ async def admin_ref_code(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
         return
     code = message.text.strip()
-    if not code.isalnum():
+    if not re.match(r"^[A-Za-z0-9]+$", code):
         await message.answer("Код должен состоять из латиницы и цифр, без пробелов.")
         return
     config = runtime.config
@@ -1154,108 +1149,57 @@ async def admin_ref_code(message: Message, state: FSMContext) -> None:
         return
     db = await get_db(config.db_path)
     try:
-        if await dao.get_user_by_ref_code(db, code):
-            await message.answer("Код уже используется пользователем. Введите другой.")
+        if await dao.get_user_by_ref_code(db, code) or await dao.get_referral_link(db, code):
+            await message.answer("Код уже используется. Введите другой.")
             return
     finally:
         await db.close()
     await state.update_data(ref_code=code)
-    await state.set_state(AdminStates.ref_owner)
-    await message.answer("Шаг 2/6. Введите tg_id владельца (кому начислять бонус) или 0.")
+    await state.set_state(AdminStates.ref_bonuses)
+    await message.answer(
+        "Шаг 2/2. Введите бонус приглашенному (руб).\n"
+        "Можно вторым числом указать бонус приглашающему.\n"
+        "Примеры: `100` или `100 50`.",
+        parse_mode=None,
+    )
 
 
-@router.message(AdminStates.ref_owner)
-async def admin_ref_owner(message: Message, state: FSMContext) -> None:
+@router.message(AdminStates.ref_bonuses)
+async def admin_ref_bonuses(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
         return
-    text = message.text.strip()
-    if not text.isdigit():
-        await message.answer("Введите числовой tg_id или 0.")
-        return
-    owner_tg_id = int(text)
-    owner_user_id = None
-    if owner_tg_id != 0:
-        config = runtime.config
-        if config is None:
-            return
-        db = await get_db(config.db_path)
-        try:
-            owner = await dao.get_user_by_tg_id(db, owner_tg_id)
-            if not owner:
-                await message.answer("Владелец не найден. Введите другой tg_id или 0.")
-                return
-            owner_user_id = owner["id"]
-        finally:
-            await db.close()
-    await state.update_data(ref_owner_user_id=owner_user_id)
-    await state.set_state(AdminStates.ref_bonus_inviter)
-    await message.answer("Шаг 3/6. Бонус приглашающему (рубли, 0 если не нужен).")
-
-
-@router.message(AdminStates.ref_bonus_inviter)
-async def admin_ref_bonus_inviter(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
-        return
-    try:
-        val = int(message.text.strip())
-    except Exception:
-        await message.answer("Введите целое число.")
-        return
-    await state.update_data(ref_bonus_inviter=val)
-    await state.set_state(AdminStates.ref_bonus_invited)
-    await message.answer("Шаг 4/6. Бонус приглашённому (рубли, 0 если не нужен).")
-
-
-@router.message(AdminStates.ref_bonus_invited)
-async def admin_ref_bonus_invited(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
-        return
-    try:
-        val = int(message.text.strip())
-    except Exception:
-        await message.answer("Введите целое число.")
-        return
-    await state.update_data(ref_bonus_invited=val)
-    await state.set_state(AdminStates.ref_limit_total)
-    await message.answer("Шаг 5/6. Общий лимит срабатываний (0 = без лимита).")
-
-
-@router.message(AdminStates.ref_limit_total)
-async def admin_ref_limit_total(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
-        return
-    try:
-        val = int(message.text.strip())
-    except Exception:
-        await message.answer("Введите целое число.")
-        return
-    await state.update_data(ref_limit_total=val)
-    await state.set_state(AdminStates.ref_limit_per_user)
-    await message.answer("Шаг 6/6. Лимит на владельца (0 = без лимита).")
-
-
-@router.message(AdminStates.ref_limit_per_user)
-async def admin_ref_limit_per_user(message: Message, state: FSMContext) -> None:
-    if not _require_admin(message):
-        return
-    try:
-        val = int(message.text.strip())
-    except Exception:
-        await message.answer("Введите целое число.")
-        return
-
     data = await state.get_data()
     code = data.get("ref_code")
-    owner_user_id = data.get("ref_owner_user_id")
-    bonus_inviter = int(data.get("ref_bonus_inviter") or 0)
-    bonus_invited = int(data.get("ref_bonus_invited") or 0)
-    limit_total = int(data.get("ref_limit_total") or 0)
+    if not code:
+        await message.answer("Не удалось создать ссылку. Начните заново.")
+        await state.clear()
+        return
+
+    parts = message.text.strip().split()
+    if not parts:
+        await message.answer("Введите одно или два числа.")
+        return
+    try:
+        bonus_invited = int(parts[0])
+        bonus_inviter = int(parts[1]) if len(parts) > 1 else 0
+    except Exception:
+        await message.answer("Введите одно или два числа.")
+        return
+    if bonus_invited < 0 or bonus_inviter < 0:
+        await message.answer("Бонусы не могут быть отрицательными.")
+        return
 
     config = runtime.config
     if config is None:
         return
     db = await get_db(config.db_path)
     try:
+        owner = await dao.get_user_by_tg_id(db, message.from_user.id)
+        if not owner:
+            await message.answer("Сначала откройте бота и нажмите /start.")
+            await state.clear()
+            return
+        owner_user_id = owner["id"]
         await dao.create_referral_link(
             db,
             code=code,
@@ -1263,11 +1207,11 @@ async def admin_ref_limit_per_user(message: Message, state: FSMContext) -> None:
             owner_user_id=owner_user_id,
             bonus_inviter=bonus_inviter,
             bonus_invited=bonus_invited,
-            limit_total=None if limit_total == 0 else limit_total,
-            limit_per_user=None if val == 0 else val,
+            limit_total=None,
+            limit_per_user=None,
         )
         bot_info = await message.bot.get_me()
-        link = f"https://t.me/{bot_info.username}?start=ref_{code}"
+        link = f"https://t.me/{bot_info.username}?start={code}"
         await message.answer("Ссылка создана.")
         await message.answer(f"Ссылка для распространения:\n{link}")
         await state.clear()
