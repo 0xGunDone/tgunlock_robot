@@ -61,6 +61,7 @@ def _normalize_prefix(prefix: str) -> str:
 
 APP_PREFIX = _normalize_prefix(config.app_prefix)
 WEBHOOK_PATH = f"{APP_PREFIX}/webhook" if APP_PREFIX else "/webhook"
+WEBHOOK_ROOT = APP_PREFIX if APP_PREFIX else None
 HEALTH_PATH = f"{APP_PREFIX}/health" if APP_PREFIX else "/health"
 
 app = FastAPI()
@@ -90,8 +91,7 @@ async def on_shutdown() -> None:
     await bot.session.close()
 
 
-@app.post(WEBHOOK_PATH)
-async def webhook(
+async def _handle_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(None),
 ) -> Response:
@@ -112,6 +112,23 @@ async def webhook(
 
     await dp.feed_update(bot, update)
     return Response(status_code=200)
+
+
+@app.post(WEBHOOK_PATH)
+async def webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(None),
+) -> Response:
+    return await _handle_webhook(request, x_telegram_bot_api_secret_token)
+
+
+if WEBHOOK_ROOT:
+    @app.post(WEBHOOK_ROOT)
+    async def webhook_root(
+        request: Request,
+        x_telegram_bot_api_secret_token: str | None = Header(None),
+    ) -> Response:
+        return await _handle_webhook(request, x_telegram_bot_api_secret_token)
 
 
 @app.get(HEALTH_PATH)
