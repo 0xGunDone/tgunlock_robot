@@ -74,12 +74,16 @@ async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None) -> None:
         await call.message.answer(text, reply_markup=reply_markup)
 
 
+def _normalize_login(login: str, prefix: str) -> str:
+    return f"{prefix}{login}".lower()
+
+
 async def _create_proxy_for_user(db, user_id: int, is_free: int) -> dict:
     provider = runtime.proxy_provider
     if provider is None:
         raise RuntimeError("Proxy provider not initialized")
 
-    login = generate_login()
+    login = _normalize_login(generate_login(), "tgunlockrobot_")
     password = generate_password()
     ip, port = await provider.create_proxy(login, password)
     await dao.create_proxy(
