@@ -16,6 +16,9 @@ class ProxyProvider(Protocol):
     async def disable_proxy(self, login: str) -> None:
         ...
 
+    async def delete_proxy(self, login: str) -> None:
+        ...
+
 
 @dataclass
 class MockProxyProvider:
@@ -29,6 +32,9 @@ class MockProxyProvider:
         return None
 
     async def disable_proxy(self, login: str) -> None:
+        return None
+
+    async def delete_proxy(self, login: str) -> None:
         return None
 
 
@@ -67,6 +73,10 @@ class CommandProxyProvider:
     async def disable_proxy(self, login: str) -> None:
         cmd = self.cmd_disable.format(login=login)
         await self._run(cmd)
+
+    async def delete_proxy(self, login: str) -> None:
+        # Fallback to disable if delete isn't explicitly supported
+        await self.disable_proxy(login)
 
 
 @dataclass
@@ -112,4 +122,8 @@ class DantedPamProxyProvider:
 
     async def disable_proxy(self, login: str) -> None:
         cmd = self._build_cmd(["usermod", "-L", login])
+        await self._run(cmd, check=False)
+
+    async def delete_proxy(self, login: str) -> None:
+        cmd = self._build_cmd(["userdel", login])
         await self._run(cmd, check=False)

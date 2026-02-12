@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 
@@ -200,7 +200,11 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
             if provider:
                 for p in proxies:
                     try:
-                        await provider.disable_proxy(p["login"])
+                        delete_fn = getattr(provider, "delete_proxy", None)
+                        if callable(delete_fn):
+                            await delete_fn(p["login"])
+                        else:
+                            await provider.disable_proxy(p["login"])
                     except Exception:
                         continue
             await dao.delete_user(db, user_id)
@@ -263,7 +267,11 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
             if provider:
                 for p in proxies:
                     try:
-                        await provider.disable_proxy(p["login"])
+                        delete_fn = getattr(provider, "delete_proxy", None)
+                        if callable(delete_fn):
+                            await delete_fn(p["login"])
+                        else:
+                            await provider.disable_proxy(p["login"])
                     except Exception:
                         continue
             await dao.delete_user(db, user_id)
@@ -481,7 +489,7 @@ async def admin_export(call: CallbackQuery) -> None:
     )
 
 
-@router.message(F.text)
+@router.message(StateFilter(None), F.text)
 async def admin_export_csv(message: Message) -> None:
     if not _require_admin(message):
         return

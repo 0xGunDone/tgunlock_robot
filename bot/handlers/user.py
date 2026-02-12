@@ -99,6 +99,14 @@ async def _create_proxy_for_user(db, user_id: int, is_free: int) -> dict:
     return {"login": login, "password": password, "ip": ip, "port": port}
 
 
+async def _delete_proxy_login(provider, login: str) -> None:
+    delete_fn = getattr(provider, "delete_proxy", None)
+    if callable(delete_fn):
+        await delete_fn(login)
+    else:
+        await provider.disable_proxy(login)
+
+
 async def _apply_referral(db, ref_arg: str | None, user_id: int) -> None:
     if not ref_arg:
         return
@@ -437,7 +445,7 @@ async def proxy_delete_apply(call: CallbackQuery) -> None:
         if not proxy:
             await _safe_edit(call, "Прокси не найден.", reply_markup=proxy_detail_kb())
             return
-        await provider.disable_proxy(proxy["login"])
+        await _delete_proxy_login(provider, proxy["login"])
         await dao.mark_proxy_deleted(db, proxy_id)
         await my_proxies(call)
     finally:
