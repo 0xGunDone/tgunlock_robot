@@ -4,6 +4,7 @@ from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, LabeledPrice
+from html import escape as html_escape
 
 from bot import dao
 from bot.db import get_db
@@ -67,11 +68,21 @@ async def _get_user_and_header(db, tg_id: int) -> tuple[object | None, str | Non
     return user, header
 
 
-async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None) -> None:
+async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
     try:
-        await call.message.edit_text(text, reply_markup=reply_markup)
+        await call.message.edit_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=True,
+        )
     except Exception:
-        await call.message.answer(text, reply_markup=reply_markup)
+        await call.message.answer(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=True,
+        )
 
 
 def _normalize_login(login: str, prefix: str) -> str:
@@ -158,6 +169,28 @@ async def _apply_referral(db, ref_arg: str | None, user_id: int) -> None:
         )
 
 
+async def _build_proxy_links_text(db, proxy) -> str:
+    lines = []
+    socks_enabled = await get_bool_setting(db, "socks_enabled", True)
+    mtproto_enabled = await get_bool_setting(db, "mtproto_enabled", False)
+
+    if socks_enabled:
+        socks_link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], proxy["password"])
+        lines.append(f"SOCKS:\n{socks_link}")
+
+    if mtproto_enabled:
+        host = (await dao.get_setting(db, "mtproto_host", "")) or runtime.config.proxy_default_ip
+        port = await dao.get_setting(db, "mtproto_port", "9443") or "9443"
+        secret = await dao.get_setting(db, "mtproto_secret", "") or ""
+        if secret:
+            mt_link = f"https://t.me/proxy?server={host}&port={port}&secret={secret}"
+            lines.append(f"MTProto:\n{mt_link}")
+
+    if not lines:
+        return "Методы выдачи прокси отключены админом."
+    return "\n\n".join(lines)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     config = runtime.config
@@ -207,13 +240,13 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
         try:
             proxy = await _create_proxy_for_user(db, user_id, is_free=1)
-            link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], proxy["password"])
+            links_text = await _build_proxy_links_text(db, proxy)
             user_row, header = await _get_user_and_header(db, message.from_user.id)
             prefix = f"{header}\n\n" if header else ""
             await message.answer(
                 prefix
                 + "Добро пожаловать! Ваш бесплатный прокси готов:\n"
-                f"{link}\n\n"
+                f"{links_text}\n\n"
                 "Нажмите на ссылку → Telegram откроет настройки прокси → Добавьте прокси → "
                 "Включайте и выключайте в настройках Telegram.\n\n"
                 f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
@@ -319,8 +352,8 @@ async def my_proxies(call: CallbackQuery) -> None:
         header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
         lines = [f"{header}", "", "Ваши прокси:"]
         for idx, p in enumerate(proxies, 1):
-            link = build_proxy_link(p["ip"], p["port"], p["login"], p["password"])
-            lines.append(f"{idx}. {p['login']} — {link}")
+            links_text = await _build_proxy_links_text(db, p)
+            lines.append(f"{idx}. {p['login']}\n{links_text}")
         await _safe_edit(call, "\n".join(lines), reply_markup=proxies_list_kb(proxy_dicts))
     finally:
         await db.close()
@@ -361,14 +394,14 @@ async def proxy_buy_cb(call: CallbackQuery) -> None:
 
         await dao.add_user_balance(db, user["id"], -price)
         proxy = await _create_proxy_for_user(db, user["id"], is_free=0)
-        link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], proxy["password"])
+        links_text = await _build_proxy_links_text(db, proxy)
         active = await dao.count_active_proxies(db, user_id=user["id"])
         header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
         await _safe_edit(
             call,
             f"{header}\n\n"
             "Новый прокси создан:\n"
-            f"{link}\n\n"
+            f"{links_text}\n\n"
             f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
             reply_markup=proxy_detail_kb(),
         )
@@ -388,7 +421,7 @@ async def proxy_show(call: CallbackQuery) -> None:
         if not proxy:
             await _safe_edit(call, "Прокси не найден.", reply_markup=proxy_detail_kb())
             return
-        link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], proxy["password"])
+        links_text = await _build_proxy_links_text(db, proxy)
         user = await dao.get_user_by_id(db, proxy["user_id"])
         active = await dao.count_active_proxies(db, user_id=proxy["user_id"]) if user else 0
         balance = user["balance"] if user else 0
@@ -397,7 +430,7 @@ async def proxy_show(call: CallbackQuery) -> None:
             call,
             f"{header}\n\n"
             "Ссылка на прокси:\n"
-            f"{link}\n\n"
+            f"{links_text}\n\n"
             f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
             reply_markup=proxy_detail_kb(),
         )
@@ -418,10 +451,11 @@ async def proxy_delete_prepare(call: CallbackQuery) -> None:
             await _safe_edit(call, "Прокси не найден.", reply_markup=proxy_detail_kb())
             return
         link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], proxy["password"])
+        links_text = await _build_proxy_links_text(db, proxy)
         await _safe_edit(
             call,
             "Удалить прокси?\n"
-            f"{link}\n\n"
+            f"{links_text}\n\n"
             "Это действие нельзя отменить.",
             reply_markup=proxy_delete_confirm_kb(proxy_id),
         )
@@ -494,9 +528,14 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
         stars_url = await dao.get_setting(db, "stars_buy_url", "") or ""
         hint = ""
         if hint_enabled and stars_url:
-            hint = f"\n\nГде купить Stars:\n{stars_url}"
+            safe_url = html_escape(stars_url, quote=True)
+            hint = f"\n\nЗВЕЗДЫ МОЖНО КУПИТЬ <a href=\"{safe_url}\">ТУТ</a>"
         await state.set_state(UserStates.waiting_topup_amount)
-        await _safe_edit(call, f"{header}\n\nВведите сумму пополнения в рублях (целое число).{hint}")
+        await _safe_edit(
+            call,
+            f"{header}\n\nВведите сумму пополнения в рублях (целое число).{hint}",
+            parse_mode="HTML",
+        )
     finally:
         await db.close()
 

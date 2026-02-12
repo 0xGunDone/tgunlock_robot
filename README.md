@@ -67,6 +67,11 @@ PROXY_CMD_PREFIX=sudo
 8. `stars_rate = 1` — курс Stars к рублю (1 Star = 1 ₽).
 9. `stars_buy_url = ""` — ссылка где купить Stars (если нужна подсказка).
 10. `stars_buy_hint_enabled = 0` — показывать подсказку где купить Stars (0/1).
+11. `socks_enabled = 1` — показывать SOCKS ссылку (0/1).
+12. `mtproto_enabled = 0` — показывать MTProto ссылку (0/1).
+13. `mtproto_host = ""` — хост MTProto (если пусто, используется `PROXY_DEFAULT_IP`).
+14. `mtproto_port = 9443` — порт MTProto.
+15. `mtproto_secret = ""` — общий secret MTProto.
 
 ## Админка: изменение настроек
 

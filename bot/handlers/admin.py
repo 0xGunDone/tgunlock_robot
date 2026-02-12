@@ -32,11 +32,21 @@ def _require_admin(message: Message) -> bool:
     return True
 
 
-async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None) -> None:
+async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
     try:
-        await call.message.edit_text(text, reply_markup=reply_markup)
+        await call.message.edit_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=True,
+        )
     except Exception:
-        await call.message.answer(text, reply_markup=reply_markup)
+        await call.message.answer(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=True,
+        )
 
 
 @router.message(Command("admin"))
