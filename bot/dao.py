@@ -96,7 +96,14 @@ async def unblock_user(db: aiosqlite.Connection, user_id: int) -> None:
 
 
 async def delete_user(db: aiosqlite.Connection, user_id: int) -> None:
-    await db.execute("UPDATE users SET deleted_at = ? WHERE id = ?", (now_iso(), user_id))
+    await db.execute(
+        "DELETE FROM referral_events WHERE inviter_user_id = ? OR invited_user_id = ?",
+        (user_id, user_id),
+    )
+    await db.execute("DELETE FROM referral_links WHERE owner_user_id = ?", (user_id,))
+    await db.execute("DELETE FROM payments WHERE user_id = ?", (user_id,))
+    await db.execute("DELETE FROM proxies WHERE user_id = ?", (user_id,))
+    await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     await db.commit()
 
 

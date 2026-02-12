@@ -6,8 +6,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
             InlineKeyboardButton(text="🧦 Мои прокси", callback_data="menu:proxies"),
+            InlineKeyboardButton(text="➕ Купить прокси", callback_data="proxy:buy"),
         ],
         [
             InlineKeyboardButton(text="⭐ Пополнить", callback_data="menu:topup"),
@@ -43,6 +43,14 @@ def admin_menu_inline_kb() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main"),
         ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_referrals_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="Создать ссылку", callback_data="admin:ref_create")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -98,15 +106,43 @@ def admin_settings_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def proxy_actions_kb() -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text="Купить новый прокси", callback_data="proxy:buy")],
-        [InlineKeyboardButton(text="Обновить пароль", callback_data="proxy:passwd")],
-        [InlineKeyboardButton(text="Удалить прокси", callback_data="proxy:delete")],
-        [InlineKeyboardButton(text="Показать список", callback_data="proxy:list")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
-    ]
+def proxies_list_kb(proxies: list[dict]) -> InlineKeyboardMarkup:
+    buttons = []
+    for p in proxies:
+        buttons.append(
+            [
+                InlineKeyboardButton(text=p["login"], callback_data=f"proxy:show:{p['id']}"),
+                InlineKeyboardButton(text="🗑", callback_data=f"proxy:delete:{p['id']}"),
+            ]
+        )
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def proxy_detail_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:proxies")]]
+    )
+
+
+def proxies_empty_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Купить прокси", callback_data="proxy:buy")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+        ]
+    )
+
+
+def proxy_delete_confirm_kb(proxy_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"proxy:delete_confirm:{proxy_id}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="menu:proxies"),
+            ]
+        ]
+    )
 
 
 def proxies_select_kb(action: str, proxies: list[dict]) -> InlineKeyboardMarkup:
