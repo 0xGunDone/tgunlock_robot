@@ -13,7 +13,13 @@ from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from bot import dao
 from bot.db import get_db
 from bot.handlers.states import AdminStates
-from bot.keyboards import admin_menu_inline_kb, main_menu_inline_kb, broadcast_filters_kb, admin_user_actions_kb, admin_settings_kb, admin_referrals_kb
+from bot.keyboards import (
+    admin_menu_inline_kb,
+    broadcast_filters_kb,
+    admin_user_actions_kb,
+    admin_settings_kb,
+    admin_referrals_kb,
+)
 from bot.runtime import runtime
 from bot.services.mtproto import sync_mtproto_secrets
 
@@ -50,18 +56,46 @@ async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mo
         )
 
 
+def _settings_text(settings_map: dict[str, str]) -> str:
+    def val(key: str, default: str = "") -> str:
+        return settings_map.get(key, default)
+
+    def onoff(key: str, default: str = "0") -> str:
+        return "Вкл" if val(key, default) == "1" else "Выкл"
+
+    lines = [
+        "Настройки:",
+        f"Цена создания: {val('proxy_create_price', '0')} ₽",
+        f"Цена в день: {val('proxy_day_price', '0')} ₽",
+        f"Free credit: {val('free_credit', '0')} ₽",
+        f"Лимит прокси: {val('max_active_proxies', '0')}",
+        f"Курс Stars: {val('stars_rate', '1')} ₽/⭐",
+        f"Подсказка Stars: {onoff('stars_buy_hint_enabled', '0')}",
+        f"URL Stars: {val('stars_buy_url', '') or '—'}",
+        f"Рефералка: {onoff('referral_enabled', '1')}",
+        f"Бонус пригл.: {val('ref_bonus_inviter', '0')} ₽",
+        f"Бонус приглаш.: {val('ref_bonus_invited', '0')} ₽",
+        f"MTProto: {onoff('mtproto_enabled', '1')}",
+        f"MTProto host: {val('mtproto_host', '') or '—'}",
+        f"MTProto port: {val('mtproto_port', '9443')}",
+    ]
+    return "\n".join(lines)
+
+
 @router.message(Command("admin"))
-async def admin_start(message: Message) -> None:
+async def admin_start(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
         return
+    await state.clear()
     await message.answer("Админка", reply_markup=admin_menu_inline_kb())
 
 
 @router.callback_query(F.data == "menu:admin")
-async def admin_menu(call: CallbackQuery) -> None:
+async def admin_menu(call: CallbackQuery, state: FSMContext) -> None:
     if not _is_admin(call.from_user.id):
         return
     await call.answer()
+    await state.clear()
     await _safe_edit(call, "Админка", reply_markup=admin_menu_inline_kb())
 
 
@@ -206,18 +240,6 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
             return
 
         if text == "delete":
-            provider = runtime.proxy_provider
-            proxies = await dao.list_proxies_by_user(db, user_id)
-            if provider:
-                for p in proxies:
-                    try:
-                        delete_fn = getattr(provider, "delete_proxy", None)
-                        if callable(delete_fn):
-                            await delete_fn(p["login"])
-                        else:
-                            await provider.disable_proxy(p["login"])
-                    except Exception:
-                        continue
             await dao.delete_user(db, user_id)
             await sync_mtproto_secrets(db)
             await message.answer("Пользователь удалён.")
@@ -274,18 +296,6 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
             else:
                 await dao.block_user(db, user_id)
         elif action == "delete":
-            provider = runtime.proxy_provider
-            proxies = await dao.list_proxies_by_user(db, user_id)
-            if provider:
-                for p in proxies:
-                    try:
-                        delete_fn = getattr(provider, "delete_proxy", None)
-                        if callable(delete_fn):
-                            await delete_fn(p["login"])
-                        else:
-                            await provider.disable_proxy(p["login"])
-                    except Exception:
-                        continue
             await dao.delete_user(db, user_id)
             await sync_mtproto_secrets(db)
         elif action == "refresh":
@@ -438,14 +448,12 @@ async def admin_settings(call: CallbackQuery, state: FSMContext) -> None:
     db = await get_db(config.db_path)
     try:
         settings_map = await dao.get_settings_map(db)
-        lines = [f"{k} = {v}" for k, v in sorted(settings_map.items())]
         await _safe_edit(
             call,
-            "Текущие настройки:\n" + "\n".join(lines),
-            reply_markup=admin_menu_inline_kb(),
+            _settings_text(settings_map),
+            reply_markup=admin_settings_kb(settings_map),
         )
-        await call.message.answer("Выберите параметр или отправьте: ключ значение")
-        await call.message.answer("Настройки:", reply_markup=admin_settings_kb())
+        await call.message.answer("Чтобы изменить значение, нажмите кнопку.")
         await state.set_state(AdminStates.waiting_setting_input)
     finally:
         await db.close()
@@ -458,16 +466,11 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     selected_key = data.get("setting_key")
-
-    if selected_key:
-        key = selected_key
-        value = message.text.strip()
-    else:
-        parts = message.text.strip().split()
-        if len(parts) != 2:
-            await message.answer("Формат: ключ значение")
-            return
-        key, value = parts
+    if not selected_key:
+        await message.answer("Нажмите кнопку нужной настройки.")
+        return
+    key = selected_key
+    value = message.text.strip()
     config = runtime.config
     if config is None:
         return
@@ -477,13 +480,15 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
         await dao.set_setting(db, key, value)
         if key == "mtproto_enabled":
             await sync_mtproto_secrets(db)
+        settings_map = await dao.get_settings_map(db)
         await message.answer("Настройка обновлена.")
-        await state.clear()
+        await message.answer(_settings_text(settings_map), reply_markup=admin_settings_kb(settings_map))
+        await state.update_data(setting_key=None)
     finally:
         await db.close()
 
 
-@router.callback_query(F.data.startswith("admin_settings:"))
+@router.callback_query(F.data.startswith("admin_settings_edit:"))
 async def admin_settings_pick(call: CallbackQuery, state: FSMContext) -> None:
     if not _is_admin(call.from_user.id):
         return
@@ -491,6 +496,29 @@ async def admin_settings_pick(call: CallbackQuery, state: FSMContext) -> None:
     key = call.data.split(":", 1)[1]
     await state.update_data(setting_key=key)
     await call.message.answer(f"Введите значение для `{key}`:", parse_mode=None)
+
+
+@router.callback_query(F.data.startswith("admin_settings_toggle:"))
+async def admin_settings_toggle(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    key = call.data.split(":", 1)[1]
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        current = await dao.get_setting(db, key, "0")
+        new_value = "0" if (current or "0") == "1" else "1"
+        await dao.set_setting(db, key, new_value)
+        if key == "mtproto_enabled":
+            await sync_mtproto_secrets(db)
+        settings_map = await dao.get_settings_map(db)
+        await _safe_edit(call, _settings_text(settings_map), reply_markup=admin_settings_kb(settings_map))
+        await state.update_data(setting_key=None)
+    finally:
+        await db.close()
 
 
 @router.callback_query(F.data == "admin:export")

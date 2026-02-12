@@ -11,8 +11,7 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "stars_rate": "1",
     "stars_buy_url": "",
     "stars_buy_hint_enabled": "0",
-    "socks_enabled": "1",
-    "mtproto_enabled": "0",
+    "mtproto_enabled": "1",
     "mtproto_host": "",
     "mtproto_port": "9443",
     "ref_bonus_inviter": "10",
@@ -139,7 +138,7 @@ async def _ensure_column(
 
 
 async def ensure_default_settings(db: aiosqlite.Connection) -> None:
-    await db.execute("DELETE FROM settings WHERE key = 'mtproto_secret'")
+    await db.execute("DELETE FROM settings WHERE key IN ('mtproto_secret', 'socks_enabled')")
     for key, value in DEFAULT_SETTINGS.items():
         await db.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",

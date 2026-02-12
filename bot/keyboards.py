@@ -81,35 +81,82 @@ def admin_user_actions_kb(user_id: int, blocked: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def admin_settings_kb() -> InlineKeyboardMarkup:
+def _bool_label(value: str | None) -> str:
+    return "Вкл" if (value or "0") == "1" else "Выкл"
+
+
+def admin_settings_kb(settings: dict[str, str]) -> InlineKeyboardMarkup:
+    def val(key: str, default: str = "") -> str:
+        return settings.get(key, default)
+
     buttons = [
         [
-            InlineKeyboardButton(text="Цена создания", callback_data="admin_settings:proxy_create_price"),
-            InlineKeyboardButton(text="Цена в день", callback_data="admin_settings:proxy_day_price"),
+            InlineKeyboardButton(
+                text=f"Цена создания: {val('proxy_create_price', '0')} ₽",
+                callback_data="admin_settings_edit:proxy_create_price",
+            ),
+            InlineKeyboardButton(
+                text=f"Цена/день: {val('proxy_day_price', '0')} ₽",
+                callback_data="admin_settings_edit:proxy_day_price",
+            ),
         ],
         [
-            InlineKeyboardButton(text="Free credit", callback_data="admin_settings:free_credit"),
-            InlineKeyboardButton(text="Stars rate", callback_data="admin_settings:stars_rate"),
+            InlineKeyboardButton(
+                text=f"Free credit: {val('free_credit', '0')} ₽",
+                callback_data="admin_settings_edit:free_credit",
+            ),
+            InlineKeyboardButton(
+                text=f"Лимит прокси: {val('max_active_proxies', '0')}",
+                callback_data="admin_settings_edit:max_active_proxies",
+            ),
         ],
         [
-            InlineKeyboardButton(text="Бонус пригл.", callback_data="admin_settings:ref_bonus_inviter"),
-            InlineKeyboardButton(text="Бонус приглаш.", callback_data="admin_settings:ref_bonus_invited"),
+            InlineKeyboardButton(
+                text=f"Курс Stars: {val('stars_rate', '1')} ₽/⭐",
+                callback_data="admin_settings_edit:stars_rate",
+            ),
+            InlineKeyboardButton(
+                text="URL покупки Stars",
+                callback_data="admin_settings_edit:stars_buy_url",
+            ),
         ],
         [
-            InlineKeyboardButton(text="Лимит прокси", callback_data="admin_settings:max_active_proxies"),
-            InlineKeyboardButton(text="Referral on/off", callback_data="admin_settings:referral_enabled"),
+            InlineKeyboardButton(
+                text=f"Подсказка Stars: {_bool_label(val('stars_buy_hint_enabled', '0'))}",
+                callback_data="admin_settings_toggle:stars_buy_hint_enabled",
+            ),
         ],
         [
-            InlineKeyboardButton(text="Ссылка Stars", callback_data="admin_settings:stars_buy_url"),
-            InlineKeyboardButton(text="Показ Stars", callback_data="admin_settings:stars_buy_hint_enabled"),
+            InlineKeyboardButton(
+                text=f"Рефералка: {_bool_label(val('referral_enabled', '1'))}",
+                callback_data="admin_settings_toggle:referral_enabled",
+            ),
         ],
         [
-            InlineKeyboardButton(text="SOCKS on/off", callback_data="admin_settings:socks_enabled"),
-            InlineKeyboardButton(text="MTProto on/off", callback_data="admin_settings:mtproto_enabled"),
+            InlineKeyboardButton(
+                text=f"Бонус пригл.: {val('ref_bonus_inviter', '0')} ₽",
+                callback_data="admin_settings_edit:ref_bonus_inviter",
+            ),
+            InlineKeyboardButton(
+                text=f"Бонус приглаш.: {val('ref_bonus_invited', '0')} ₽",
+                callback_data="admin_settings_edit:ref_bonus_invited",
+            ),
         ],
         [
-            InlineKeyboardButton(text="MTProto host", callback_data="admin_settings:mtproto_host"),
-            InlineKeyboardButton(text="MTProto port", callback_data="admin_settings:mtproto_port"),
+            InlineKeyboardButton(
+                text=f"MTProto: {_bool_label(val('mtproto_enabled', '1'))}",
+                callback_data="admin_settings_toggle:mtproto_enabled",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"MTProto host: {val('mtproto_host', '') or '—'}",
+                callback_data="admin_settings_edit:mtproto_host",
+            ),
+            InlineKeyboardButton(
+                text=f"MTProto port: {val('mtproto_port', '9443')}",
+                callback_data="admin_settings_edit:mtproto_port",
+            ),
         ],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin"),

@@ -7,8 +7,6 @@ import aiosqlite
 
 from bot import dao
 from bot.services.settings import get_int_setting
-from bot.services.proxy_provider import ProxyProvider
-
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
     if not value:
@@ -19,7 +17,7 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
         return None
 
 
-async def run_billing_once(db: aiosqlite.Connection, provider: ProxyProvider) -> bool:
+async def run_billing_once(db: aiosqlite.Connection) -> bool:
     day_price = await get_int_setting(db, "proxy_day_price", 0)
     if day_price <= 0:
         return False
@@ -33,7 +31,6 @@ async def run_billing_once(db: aiosqlite.Connection, provider: ProxyProvider) ->
         user_deleted = proxy["user_deleted"] is not None
 
         if user_deleted or user_blocked:
-            await provider.disable_proxy(proxy["login"])
             await dao.set_proxy_status(db, proxy["id"], "disabled")
             changed = True
             continue
@@ -46,7 +43,6 @@ async def run_billing_once(db: aiosqlite.Connection, provider: ProxyProvider) ->
             await dao.add_user_balance(db, proxy["user_id"], -day_price)
             await dao.update_proxy_last_billed(db, proxy["id"])
         else:
-            await provider.disable_proxy(proxy["login"])
             await dao.set_proxy_status(db, proxy["id"], "disabled")
             await dao.update_proxy_last_billed(db, proxy["id"])
             changed = True

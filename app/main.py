@@ -142,11 +142,9 @@ async def billing_loop() -> None:
     while True:
         db = await get_db(config.db_path)
         try:
-            provider = runtime.proxy_provider
-            if provider:
-                changed = await run_billing_once(db, provider)
-                if changed:
-                    await sync_mtproto_secrets(db)
+            changed = await run_billing_once(db)
+            if changed:
+                await sync_mtproto_secrets(db)
         finally:
             await db.close()
         await asyncio.sleep(config.billing_interval_sec)

@@ -1,4 +1,4 @@
-# Telegram SOCKS5 Proxy Bot
+# Telegram MTProto Proxy Bot
 
 ## Запуск
 
@@ -16,6 +16,7 @@ pip install -r requirements.txt
 - `ADMIN_TG_IDS` (например: `123456789,987654321`)
 - `DB_PATH` (по умолчанию `data/bot.db`)
 - `APP_PREFIX` (если проксируете под путём, например `/tgunlock_robot`)
+- `PROXY_DEFAULT_IP` (публичный домен/IP; используется как fallback для MTProto host)
 
 3. Запустите сервер:
 
@@ -24,33 +25,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Webhook будет установлен автоматически на `WEBHOOK_URL`.
-
-## Провайдер прокси
-
-По умолчанию используется мок-провайдер. Для интеграции с реальным SOCKS5-сервером:
-
-- `PROXY_PROVIDER=command`
-- `PROXY_CMD_CREATE` — команда создания (должна вывести `IP PORT`)
-- `PROXY_CMD_UPDATE_PASSWORD` — команда смены пароля
-- `PROXY_CMD_DISABLE` — команда отключения
-
-Команды поддерживают плейсхолдеры `{login}` и `{password}`.
-
-### Dante (PAM, username)
-
-Если у вас настроен Dante с `method: username`, бот может сам создавать системных пользователей:
-
-```
-PROXY_PROVIDER=danted
-PROXY_DEFAULT_IP=ваш_публичный_IP_или_домен
-PROXY_DEFAULT_PORT=1080
-PROXY_CMD_PREFIX=sudo
-```
-
-Требования:
-- сервис бота должен иметь права на `useradd`, `chpasswd`, `usermod`.
-- либо запустить systemd‑сервис под root,
-- либо выдать sudo‑права на эти команды.
 
 ## Настройки (БД settings)
 
@@ -67,10 +41,9 @@ PROXY_CMD_PREFIX=sudo
 8. `stars_rate = 1` — курс Stars к рублю (1 Star = 1 ₽).
 9. `stars_buy_url = ""` — ссылка где купить Stars (если нужна подсказка).
 10. `stars_buy_hint_enabled = 0` — показывать подсказку где купить Stars (0/1).
-11. `socks_enabled = 1` — показывать SOCKS ссылку (0/1).
-12. `mtproto_enabled = 0` — показывать MTProto ссылку (0/1).
-13. `mtproto_host = ""` — хост MTProto (если пусто, используется `PROXY_DEFAULT_IP`).
-14. `mtproto_port = 9443` — порт MTProto.
+11. `mtproto_enabled = 1` — показывать MTProto ссылку (0/1).
+12. `mtproto_host = ""` — хост MTProto (если пусто, используется `PROXY_DEFAULT_IP`).
+13. `mtproto_port = 9443` — порт MTProto.
 
 `mtproto_secret` больше не настраивается вручную — секрет создаётся автоматически для каждого прокси.
 
@@ -79,6 +52,7 @@ PROXY_CMD_PREFIX=sudo
 Для контроля доступа у каждого прокси свой secret. Бот хранит их в файле и перезапускает MTProxy,
 когда список секретов меняется (создание/удаление/блокировка прокси).
 Для этого сервис бота должен иметь права на `systemctl restart mtproxy.service`.
+Если бот запускается от root — дополнительных прав не нужно.
 
 Опциональные переменные окружения:
 - `MTPROXY_SECRETS_FILE` — путь к файлу секретов (по умолчанию `data/mtproxy_secrets.txt`).
@@ -112,11 +86,8 @@ exec /opt/MTProxy/objs/bin/mtproto-proxy -u nobody -p 8888 -H "$PORT" "${ARGS[@]
 
 1. Открой админку командой `/admin`.
 2. Нажми `⚙️ Настройки`.
-3. Бот покажет список текущих параметров.
-4. Отправь строку в формате:
-```
-ключ значение
-```
+3. Все переключатели делаются кнопками.
+4. Для числовых полей нажми кнопку и введи значение.
 
 Примеры:
 ```

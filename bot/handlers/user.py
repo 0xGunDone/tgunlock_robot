@@ -17,13 +17,12 @@ from bot.services.settings import (
     get_bool_setting,
     convert_rub_to_stars,
 )
-from bot.services.mtproto import sync_mtproto_secrets
+from bot.services.mtproto import sync_mtproto_secrets, ensure_proxy_mtproto_secret
 from bot.utils import (
     generate_login,
     generate_password,
     generate_ref_code,
     generate_mtproto_secret,
-    build_proxy_link,
     extract_ref_code,
 )
 
@@ -92,14 +91,16 @@ def _normalize_login(login: str, prefix: str) -> str:
 
 
 async def _create_proxy_for_user(db, user_id: int, is_free: int) -> dict:
-    provider = runtime.proxy_provider
-    if provider is None:
-        raise RuntimeError("Proxy provider not initialized")
-
     login = _normalize_login(generate_login(), "tgunlockrobot_")
     password = generate_password()
     mtproto_secret = generate_mtproto_secret()
-    ip, port = await provider.create_proxy(login, password)
+    host = (await dao.get_setting(db, "mtproto_host", "")) or runtime.config.proxy_default_ip
+    port_raw = await dao.get_setting(db, "mtproto_port", "9443") or "9443"
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 9443
+    ip = host
     proxy_id = await dao.create_proxy(
         db,
         user_id=user_id,
@@ -111,15 +112,14 @@ async def _create_proxy_for_user(db, user_id: int, is_free: int) -> dict:
         is_free=is_free,
         mtproto_secret=mtproto_secret,
     )
-    return {"id": proxy_id, "login": login, "password": password, "ip": ip, "port": port, "mtproto_secret": mtproto_secret}
-
-
-async def _delete_proxy_login(provider, login: str) -> None:
-    delete_fn = getattr(provider, "delete_proxy", None)
-    if callable(delete_fn):
-        await delete_fn(login)
-    else:
-        await provider.disable_proxy(login)
+    return {
+        "id": proxy_id,
+        "login": login,
+        "password": password,
+        "ip": ip,
+        "port": port,
+        "mtproto_secret": mtproto_secret,
+    }
 
 
 async def _apply_referral(db, ref_arg: str | None, user_id: int) -> None:
@@ -175,29 +175,32 @@ async def _apply_referral(db, ref_arg: str | None, user_id: int) -> None:
 
 async def _build_proxy_links_text(db, proxy) -> str:
     lines = []
-    socks_enabled = await get_bool_setting(db, "socks_enabled", True)
-    mtproto_enabled = await get_bool_setting(db, "mtproto_enabled", False)
-
-    if socks_enabled:
-        socks_link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], proxy["password"])
-        lines.append(f"SOCKS:\n{socks_link}")
+    mtproto_enabled = await get_bool_setting(db, "mtproto_enabled", True)
 
     if mtproto_enabled:
         host = (await dao.get_setting(db, "mtproto_host", "")) or runtime.config.proxy_default_ip
         port = await dao.get_setting(db, "mtproto_port", "9443") or "9443"
         if isinstance(proxy, dict):
             secret = proxy.get("mtproto_secret", "") or ""
+            proxy_id = proxy.get("id")
         else:
             try:
                 secret = proxy["mtproto_secret"] or ""
             except Exception:
                 secret = ""
+            try:
+                proxy_id = proxy["id"]
+            except Exception:
+                proxy_id = None
+        if not secret and proxy_id:
+            secret = await ensure_proxy_mtproto_secret(db, proxy_id)
+            await sync_mtproto_secrets(db)
         if secret:
             mt_link = f"https://t.me/proxy?server={host}&port={port}&secret={secret}"
             lines.append(f"MTProto:\n{mt_link}")
 
     if not lines:
-        return "Методы выдачи прокси отключены админом."
+        return "MTProto отключён админом."
     return "\n\n".join(lines)
 
 
@@ -257,11 +260,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             prefix = f"{header}\n\n" if header else ""
             await message.answer(
                 prefix
-                + "Добро пожаловать! Ваш бесплатный прокси готов:\n"
+                + "Добро пожаловать! Ваш прокси готов:\n"
                 f"{links_text}\n\n"
                 "Нажмите на ссылку → Telegram откроет настройки прокси → Добавьте прокси → "
-                "Включайте и выключайте в настройках Telegram.\n\n"
-                f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
+                "Включайте и выключайте в настройках Telegram.",
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
             )
         except Exception:
@@ -332,7 +334,7 @@ async def menu_help(call: CallbackQuery) -> None:
             "1) Нажмите на ссылку прокси.\n"
             "2) Telegram откроет настройки прокси.\n"
             "3) Добавьте прокси и включайте/выключайте в настройках Telegram.\n\n"
-            "Если ссылка не открывается — введите данные вручную (IP, порт, логин, пароль).",
+            "Если ссылка не открывается — введите данные вручную (host, port, secret).",
             reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
         )
     finally:
@@ -362,10 +364,9 @@ async def my_proxies(call: CallbackQuery) -> None:
         ]
         active = await dao.count_active_proxies(db, user_id=user["id"])
         header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
-        lines = [f"{header}", "", "Ваши прокси:"]
+        lines = [f"{header}", "", "Ваши прокси:", "Нажмите на имя, чтобы получить ссылку."]
         for idx, p in enumerate(proxies, 1):
-            links_text = await _build_proxy_links_text(db, p)
-            lines.append(f"{idx}. {p['login']}\n{links_text}")
+            lines.append(f"{idx}. {p['login']}")
         await _safe_edit(call, "\n".join(lines), reply_markup=proxies_list_kb(proxy_dicts))
     finally:
         await db.close()
@@ -414,8 +415,7 @@ async def proxy_buy_cb(call: CallbackQuery) -> None:
             call,
             f"{header}\n\n"
             "Новый прокси создан:\n"
-            f"{links_text}\n\n"
-            f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
+            f"{links_text}",
             reply_markup=proxy_detail_kb(),
         )
     finally:
@@ -443,8 +443,7 @@ async def proxy_show(call: CallbackQuery) -> None:
             call,
             f"{header}\n\n"
             "Ссылка на прокси:\n"
-            f"{links_text}\n\n"
-            f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
+            f"{links_text}",
             reply_markup=proxy_detail_kb(),
         )
     finally:
@@ -463,7 +462,6 @@ async def proxy_delete_prepare(call: CallbackQuery) -> None:
         if not proxy:
             await _safe_edit(call, "Прокси не найден.", reply_markup=proxy_detail_kb())
             return
-        link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], proxy["password"])
         links_text = await _build_proxy_links_text(db, proxy)
         await _safe_edit(
             call,
@@ -482,9 +480,6 @@ async def proxy_delete_apply(call: CallbackQuery) -> None:
     config = runtime.config
     if config is None:
         return
-    provider = runtime.proxy_provider
-    if provider is None:
-        return
 
     proxy_id = int(call.data.split(":")[-1])
     db = await get_db(config.db_path)
@@ -493,7 +488,6 @@ async def proxy_delete_apply(call: CallbackQuery) -> None:
         if not proxy:
             await _safe_edit(call, "Прокси не найден.", reply_markup=proxy_detail_kb())
             return
-        await _delete_proxy_login(provider, proxy["login"])
         await dao.mark_proxy_deleted(db, proxy_id)
         await sync_mtproto_secrets(db)
         await my_proxies(call)
