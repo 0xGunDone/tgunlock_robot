@@ -51,6 +51,13 @@ def _get_start_args(message: Message) -> str | None:
     return parts[1].strip() or None
 
 
+def _is_admin(tg_id: int) -> bool:
+    config = runtime.config
+    if config is None:
+        return False
+    return tg_id in config.admin_tg_ids
+
+
 async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None) -> None:
     try:
         await call.message.edit_text(text, reply_markup=reply_markup)
@@ -103,7 +110,7 @@ async def cmd_start(message: Message) -> None:
             )
             await db.commit()
             await dao.update_user_last_seen(db, message.from_user.id)
-            await message.answer("Главное меню", reply_markup=main_menu_inline_kb())
+            await message.answer("Главное меню", reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)))
             return
 
         ref_arg = extract_ref_code(_get_start_args(message))
@@ -176,12 +183,12 @@ async def cmd_start(message: Message) -> None:
                 "Нажмите на ссылку → Telegram откроет настройки прокси → Добавьте прокси → "
                 "Включайте и выключайте в настройках Telegram.\n\n"
                 f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
-                reply_markup=main_menu_inline_kb(),
+                reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
             )
         except Exception:
             await message.answer(
                 "Сервис временно недоступен. Попробуйте позже.",
-                reply_markup=main_menu_inline_kb(),
+                reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
             )
     finally:
         await db.close()
@@ -190,7 +197,7 @@ async def cmd_start(message: Message) -> None:
 @router.callback_query(F.data == "menu:main")
 async def menu_main(call: CallbackQuery) -> None:
     await call.answer()
-    await _safe_edit(call, "Главное меню", reply_markup=main_menu_inline_kb())
+    await _safe_edit(call, "Главное меню", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
 
 
 @router.message(Command("help"))
@@ -201,7 +208,7 @@ async def cmd_help(message: Message) -> None:
         "2) Telegram откроет настройки прокси.\n"
         "3) Добавьте прокси и включайте/выключайте в настройках Telegram.\n\n"
         "Если ссылка не открывается — введите данные вручную (IP, порт, логин, пароль).",
-        reply_markup=main_menu_inline_kb(),
+        reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
     )
 
 
@@ -215,7 +222,7 @@ async def menu_help(call: CallbackQuery) -> None:
         "2) Telegram откроет настройки прокси.\n"
         "3) Добавьте прокси и включайте/выключайте в настройках Telegram.\n\n"
         "Если ссылка не открывается — введите данные вручную (IP, порт, логин, пароль).",
-        reply_markup=main_menu_inline_kb(),
+        reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
     )
 
 
@@ -229,13 +236,13 @@ async def show_balance(call: CallbackQuery) -> None:
     try:
         user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await call.message.answer("Нажмите /start")
+            await _safe_edit(call, "Нажмите /start", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
             return
         active = await dao.count_active_proxies(db, user_id=user["id"])
         await _safe_edit(
             call,
             f"Баланс: {user['balance']} ₽\nАктивных прокси: {active}",
-            reply_markup=main_menu_inline_kb(),
+            reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
         )
     finally:
         await db.close()
@@ -251,7 +258,7 @@ async def my_proxies(call: CallbackQuery) -> None:
     try:
         user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await call.message.answer("Нажмите /start")
+            await _safe_edit(call, "Нажмите /start", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
             return
         proxies = await dao.list_proxies_by_user(db, user["id"])
         if not proxies:
@@ -286,30 +293,32 @@ async def proxy_buy_cb(call: CallbackQuery) -> None:
     try:
         user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await call.message.answer("Нажмите /start")
+            await _safe_edit(call, "Нажмите /start", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
             return
         if user["blocked_at"]:
-            await call.message.answer("Ваш аккаунт заблокирован.")
+            await _safe_edit(call, "Ваш аккаунт заблокирован.")
             return
 
         max_active = await get_int_setting(db, "max_active_proxies", 10)
         active_count = await dao.count_active_proxies(db, user_id=user["id"])
         if max_active > 0 and active_count >= max_active:
-            await call.message.answer("Достигнут лимит активных прокси.")
+            await _safe_edit(call, "Достигнут лимит активных прокси.")
             return
 
         price = await get_int_setting(db, "proxy_create_price", 0)
         if user["balance"] < price:
-            await call.message.answer("Недостаточно средств. Пополните баланс.")
+            await _safe_edit(call, "Недостаточно средств. Пополните баланс.")
             return
 
         await dao.add_user_balance(db, user["id"], -price)
         proxy = await _create_proxy_for_user(db, user["id"], is_free=0)
         link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], proxy["password"])
-        await call.message.answer(
+        await _safe_edit(
+            call,
             "Новый прокси создан:\n"
             f"{link}\n\n"
-            f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}"
+            f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {proxy['password']}",
+            reply_markup=proxy_actions_kb(),
         )
     finally:
         await db.close()
@@ -325,17 +334,18 @@ async def proxy_passwd_select(call: CallbackQuery) -> None:
     try:
         user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await call.message.answer("Нажмите /start")
+            await _safe_edit(call, "Нажмите /start", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
             return
         proxies = await dao.list_proxies_by_user(db, user["id"])
         if not proxies:
-            await call.message.answer("Нет прокси.")
+            await _safe_edit(call, "Нет прокси.", reply_markup=proxy_actions_kb())
             return
         proxy_dicts = [
             {"id": p["id"], "login": p["login"], "ip": p["ip"], "port": p["port"]}
             for p in proxies
         ]
-        await call.message.answer(
+        await _safe_edit(
+            call,
             "Выберите прокси для смены пароля:",
             reply_markup=proxies_select_kb("passwd", proxy_dicts),
         )
@@ -358,7 +368,7 @@ async def proxy_passwd_apply(call: CallbackQuery) -> None:
     try:
         proxy = await dao.get_proxy_by_id(db, proxy_id)
         if not proxy:
-            await call.message.answer("Прокси не найден.")
+            await _safe_edit(call, "Прокси не найден.", reply_markup=proxy_actions_kb())
             return
 
         new_password = generate_password()
@@ -366,10 +376,12 @@ async def proxy_passwd_apply(call: CallbackQuery) -> None:
         await dao.update_proxy_password(db, proxy_id, new_password)
 
         link = build_proxy_link(proxy["ip"], proxy["port"], proxy["login"], new_password)
-        await call.message.answer(
+        await _safe_edit(
+            call,
             "Пароль обновлён:\n"
             f"{link}\n\n"
-            f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {new_password}"
+            f"IP: {proxy['ip']}\nПорт: {proxy['port']}\nЛогин: {proxy['login']}\nПароль: {new_password}",
+            reply_markup=proxy_actions_kb(),
         )
     finally:
         await db.close()
@@ -385,17 +397,18 @@ async def proxy_delete_select(call: CallbackQuery) -> None:
     try:
         user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await call.message.answer("Нажмите /start")
+            await _safe_edit(call, "Нажмите /start", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
             return
         proxies = await dao.list_proxies_by_user(db, user["id"])
         if not proxies:
-            await call.message.answer("Нет прокси.")
+            await _safe_edit(call, "Нет прокси.", reply_markup=proxy_actions_kb())
             return
         proxy_dicts = [
             {"id": p["id"], "login": p["login"], "ip": p["ip"], "port": p["port"]}
             for p in proxies
         ]
-        await call.message.answer(
+        await _safe_edit(
+            call,
             "Выберите прокси для удаления:",
             reply_markup=proxies_select_kb("delete", proxy_dicts),
         )
@@ -418,29 +431,11 @@ async def proxy_delete_apply(call: CallbackQuery) -> None:
     try:
         proxy = await dao.get_proxy_by_id(db, proxy_id)
         if not proxy:
-            await call.message.answer("Прокси не найден.")
+            await _safe_edit(call, "Прокси не найден.", reply_markup=proxy_actions_kb())
             return
         await provider.disable_proxy(proxy["login"])
         await dao.mark_proxy_deleted(db, proxy_id)
-        await call.message.answer("Прокси удалён.")
-    finally:
-        await db.close()
-
-
-@router.callback_query(F.data == "menu:devices")
-async def devices_info(call: CallbackQuery) -> None:
-    await call.answer()
-    config = runtime.config
-    if config is None:
-        return
-    db = await get_db(config.db_path)
-    try:
-        device_limit = await get_int_setting(db, "device_limit", 0)
-        await _safe_edit(
-            call,
-            f"Лимит устройств: {device_limit if device_limit > 0 else 'не задан'}",
-            reply_markup=main_menu_inline_kb(),
-        )
+        await _safe_edit(call, "Прокси удалён.", reply_markup=proxy_actions_kb())
     finally:
         await db.close()
 
@@ -455,13 +450,13 @@ async def referral_info(call: CallbackQuery) -> None:
     try:
         user = await dao.get_user_by_tg_id(db, call.from_user.id)
         if not user:
-            await call.message.answer("Нажмите /start")
+            await _safe_edit(call, "Нажмите /start", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
             return
         await _safe_edit(
             call,
             "Ваша реферальная ссылка:\n"
             f"https://t.me/{(await call.bot.get_me()).username}?start=ref_{user['ref_code']}",
-            reply_markup=main_menu_inline_kb(),
+            reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
         )
     finally:
         await db.close()
@@ -471,7 +466,7 @@ async def referral_info(call: CallbackQuery) -> None:
 async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     await state.set_state(UserStates.waiting_topup_amount)
-    await call.message.answer("Введите сумму пополнения в рублях (целое число).")
+    await _safe_edit(call, "Введите сумму пополнения в рублях (целое число).")
 
 
 @router.message(UserStates.waiting_topup_amount)

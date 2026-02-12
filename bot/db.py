@@ -12,7 +12,6 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "ref_bonus_inviter": "10",
     "ref_bonus_invited": "10",
     "max_active_proxies": "10",
-    "device_limit": "0",
     "referral_enabled": "1",
 }
 
@@ -53,8 +52,6 @@ async def init_db(db: aiosqlite.Connection) -> None:
             port INTEGER NOT NULL,
             status TEXT NOT NULL,
             is_free INTEGER NOT NULL DEFAULT 0,
-            device_limit INTEGER NOT NULL DEFAULT 0,
-            device_count INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             last_billed_at TEXT,
             deleted_at TEXT,

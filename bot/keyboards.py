@@ -3,21 +3,22 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-def main_menu_inline_kb() -> InlineKeyboardMarkup:
+def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [
             InlineKeyboardButton(text="💰 Баланс", callback_data="menu:balance"),
             InlineKeyboardButton(text="🧦 Мои прокси", callback_data="menu:proxies"),
         ],
         [
-            InlineKeyboardButton(text="🖥 Устройства", callback_data="menu:devices"),
             InlineKeyboardButton(text="⭐ Пополнить", callback_data="menu:topup"),
+            InlineKeyboardButton(text="🤝 Рефералы", callback_data="menu:referrals"),
         ],
         [
-            InlineKeyboardButton(text="🤝 Рефералы", callback_data="menu:referrals"),
             InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help"),
         ],
     ]
+    if is_admin:
+        buttons.append([InlineKeyboardButton(text="🛠 Админка", callback_data="menu:admin")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -41,6 +42,57 @@ def admin_menu_inline_kb() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_user_actions_kb(user_id: int, blocked: bool) -> InlineKeyboardMarkup:
+    block_label = "Разблок" if blocked else "Блок"
+    buttons = [
+        [
+            InlineKeyboardButton(text="+10", callback_data=f"admin_user:delta:{user_id}:10"),
+            InlineKeyboardButton(text="+100", callback_data=f"admin_user:delta:{user_id}:100"),
+        ],
+        [
+            InlineKeyboardButton(text="-10", callback_data=f"admin_user:delta:{user_id}:-10"),
+            InlineKeyboardButton(text="-100", callback_data=f"admin_user:delta:{user_id}:-100"),
+        ],
+        [
+            InlineKeyboardButton(text="Свой баланс", callback_data=f"admin_user:custom:{user_id}"),
+            InlineKeyboardButton(text="Обновить", callback_data=f"admin_user:refresh:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=block_label, callback_data=f"admin_user:block:{user_id}"),
+            InlineKeyboardButton(text="Удалить", callback_data=f"admin_user:delete:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_settings_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="Цена создания", callback_data="admin_settings:proxy_create_price"),
+            InlineKeyboardButton(text="Цена в день", callback_data="admin_settings:proxy_day_price"),
+        ],
+        [
+            InlineKeyboardButton(text="Free credit", callback_data="admin_settings:free_credit"),
+            InlineKeyboardButton(text="Stars rate", callback_data="admin_settings:stars_rate"),
+        ],
+        [
+            InlineKeyboardButton(text="Бонус пригл.", callback_data="admin_settings:ref_bonus_inviter"),
+            InlineKeyboardButton(text="Бонус приглаш.", callback_data="admin_settings:ref_bonus_invited"),
+        ],
+        [
+            InlineKeyboardButton(text="Лимит прокси", callback_data="admin_settings:max_active_proxies"),
+        ],
+        [
+            InlineKeyboardButton(text="Referral on/off", callback_data="admin_settings:referral_enabled"),
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

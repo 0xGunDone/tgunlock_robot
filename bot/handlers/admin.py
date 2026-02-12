@@ -13,7 +13,7 @@ from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from bot import dao
 from bot.db import get_db
 from bot.handlers.states import AdminStates
-from bot.keyboards import admin_menu_inline_kb, main_menu_inline_kb, broadcast_filters_kb
+from bot.keyboards import admin_menu_inline_kb, main_menu_inline_kb, broadcast_filters_kb, admin_user_actions_kb, admin_settings_kb
 from bot.runtime import runtime
 
 router = Router()
@@ -44,6 +44,14 @@ async def admin_start(message: Message) -> None:
     if not _require_admin(message):
         return
     await message.answer("Админка", reply_markup=admin_menu_inline_kb())
+
+
+@router.callback_query(F.data == "menu:admin")
+async def admin_menu(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    await _safe_edit(call, "Админка", reply_markup=admin_menu_inline_kb())
 
 
 @router.callback_query(F.data == "admin:stats")
@@ -140,9 +148,10 @@ async def admin_user_query(message: Message, state: FSMContext) -> None:
             f"Дата регистрации: {user['created_at']}"
         )
         await message.answer(
-            "Действия: отправьте `+ сумма` или `- сумма` для изменения баланса, "
-            "`block`/`unblock` для блокировки, `delete` для удаления.",
+            "Действия через кнопки или текст:\n"
+            "`+ сумма`, `- сумма`, `block`, `unblock`, `delete`",
             parse_mode=None,
+            reply_markup=admin_user_actions_kb(user["id"], bool(user["blocked_at"])),
         )
         await state.set_state(AdminStates.waiting_user_action)
     finally:
@@ -201,6 +210,106 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
             return
 
         await message.answer("Неизвестная команда.")
+    finally:
+        await db.close()
+
+
+async def _admin_user_profile(db, user_id: int) -> str:
+    user = await dao.get_user_by_id(db, user_id)
+    if not user:
+        return "Пользователь не найден."
+    return (
+        "Профиль:\n"
+        f"ID: {user['id']}\n"
+        f"tg_id: {user['tg_id']}\n"
+        f"username: @{user['username']}\n"
+        f"Баланс: {user['balance']} ₽\n"
+        f"Заблокирован: {'да' if user['blocked_at'] else 'нет'}\n"
+        f"Дата регистрации: {user['created_at']}"
+    )
+
+
+@router.callback_query(F.data.startswith("admin_user:"))
+async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) < 3:
+        return
+    action = parts[1]
+    user_id = int(parts[2])
+
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        if action == "delta" and len(parts) == 4:
+            delta = int(parts[3])
+            await dao.add_user_balance(db, user_id, delta)
+        elif action == "custom":
+            await state.set_state(AdminStates.waiting_balance_delta)
+            await state.update_data(balance_user_id=user_id)
+            await call.message.answer("Введите сумму (можно со знаком -):")
+            return
+        elif action == "block":
+            user = await dao.get_user_by_id(db, user_id)
+            if user and user["blocked_at"]:
+                await dao.unblock_user(db, user_id)
+            else:
+                await dao.block_user(db, user_id)
+        elif action == "delete":
+            provider = runtime.proxy_provider
+            proxies = await dao.list_proxies_by_user(db, user_id)
+            if provider:
+                for p in proxies:
+                    try:
+                        await provider.disable_proxy(p["login"])
+                    except Exception:
+                        continue
+            for p in proxies:
+                await dao.mark_proxy_deleted(db, p["id"])
+            await dao.delete_user(db, user_id)
+        elif action == "refresh":
+            pass
+
+        user = await dao.get_user_by_id(db, user_id)
+        if not user:
+            await _safe_edit(call, "Пользователь не найден.", reply_markup=admin_menu_inline_kb())
+            return
+        text = await _admin_user_profile(db, user_id)
+        await _safe_edit(call, text, reply_markup=admin_user_actions_kb(user_id, bool(user["blocked_at"])))
+    finally:
+        await db.close()
+
+
+@router.message(AdminStates.waiting_balance_delta)
+async def admin_user_custom_delta(message: Message, state: FSMContext) -> None:
+    if not _require_admin(message):
+        return
+    data = await state.get_data()
+    user_id = data.get("balance_user_id")
+    if not user_id:
+        await state.clear()
+        return
+    try:
+        delta = int(message.text.strip())
+    except Exception:
+        await message.answer("Введите целое число (можно со знаком -).")
+        return
+
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        await dao.add_user_balance(db, user_id, delta)
+        user = await dao.get_user_by_id(db, user_id)
+        if user:
+            text = await _admin_user_profile(db, user_id)
+            await message.answer(text, reply_markup=admin_user_actions_kb(user_id, bool(user["blocked_at"])))
+        await state.clear()
     finally:
         await db.close()
 
@@ -318,7 +427,8 @@ async def admin_settings(call: CallbackQuery, state: FSMContext) -> None:
             "Текущие настройки:\n" + "\n".join(lines),
             reply_markup=admin_menu_inline_kb(),
         )
-        await call.message.answer("Отправьте: ключ значение (например: proxy_day_price 10)")
+        await call.message.answer("Выберите параметр или отправьте: ключ значение")
+        await call.message.answer("Настройки:", reply_markup=admin_settings_kb())
         await state.set_state(AdminStates.waiting_setting_input)
     finally:
         await db.close()
@@ -329,12 +439,18 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
         return
 
-    parts = message.text.strip().split()
-    if len(parts) != 2:
-        await message.answer("Формат: ключ значение")
-        return
+    data = await state.get_data()
+    selected_key = data.get("setting_key")
 
-    key, value = parts
+    if selected_key:
+        key = selected_key
+        value = message.text.strip()
+    else:
+        parts = message.text.strip().split()
+        if len(parts) != 2:
+            await message.answer("Формат: ключ значение")
+            return
+        key, value = parts
     config = runtime.config
     if config is None:
         return
@@ -346,6 +462,16 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
         await state.clear()
     finally:
         await db.close()
+
+
+@router.callback_query(F.data.startswith("admin_settings:"))
+async def admin_settings_pick(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    key = call.data.split(":", 1)[1]
+    await state.update_data(setting_key=key)
+    await call.message.answer(f"Введите значение для `{key}`:", parse_mode=None)
 
 
 @router.callback_query(F.data == "admin:export")

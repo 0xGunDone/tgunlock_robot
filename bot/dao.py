@@ -125,13 +125,11 @@ async def create_proxy(
     port: int,
     status: str,
     is_free: int,
-    device_limit: int = 0,
-    device_count: int = 0,
 ) -> int:
     cur = await db.execute(
         """
-        INSERT INTO proxies (user_id, login, password, ip, port, status, is_free, device_limit, device_count, created_at, last_billed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO proxies (user_id, login, password, ip, port, status, is_free, created_at, last_billed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -141,8 +139,6 @@ async def create_proxy(
             port,
             status,
             is_free,
-            device_limit,
-            device_count,
             now_iso(),
             now_iso(),
         ),
