@@ -8,7 +8,7 @@ import aiosqlite
 
 from bot import dao
 from bot.runtime import runtime
-from bot.services.settings import get_bool_setting
+from bot.services.settings import get_bool_setting, get_int_setting
 from bot.utils import generate_mtproto_secret
 
 
@@ -31,6 +31,47 @@ async def ensure_proxy_mtproto_secret(db: aiosqlite.Connection, proxy_id: int) -
     secret = generate_mtproto_secret()
     await dao.update_proxy_mtproto_secret(db, proxy_id, secret)
     return secret
+
+
+async def reenable_proxies_for_user(db: aiosqlite.Connection, user_id: int) -> list[aiosqlite.Row]:
+    mt_enabled = await get_bool_setting(db, "mtproto_enabled", True)
+    if not mt_enabled:
+        return []
+    day_price = await get_int_setting(db, "proxy_day_price", 0)
+    if day_price <= 0:
+        return []
+
+    user = await dao.get_user_by_id(db, user_id)
+    if not user or user["deleted_at"] or user["blocked_at"]:
+        return []
+
+    if int(user["balance"]) < day_price:
+        return []
+
+    max_active = await get_int_setting(db, "max_active_proxies", 0)
+    active_count = await dao.count_active_proxies(db, user_id=user_id)
+    if max_active > 0:
+        slots = max_active - active_count
+        if slots <= 0:
+            return []
+    else:
+        slots = 10**9
+
+    cur = await db.execute(
+        "SELECT * FROM proxies WHERE user_id = ? AND status = 'disabled' AND deleted_at IS NULL ORDER BY created_at",
+        (user_id,),
+    )
+    disabled = await cur.fetchall()
+    if not disabled:
+        return []
+
+    to_enable = disabled[:slots]
+    for proxy in to_enable:
+        await dao.set_proxy_status(db, proxy["id"], "active")
+        await dao.update_proxy_last_billed(db, proxy["id"])
+
+    await sync_mtproto_secrets(db)
+    return to_enable
 
 
 async def sync_mtproto_secrets(db: aiosqlite.Connection) -> None:

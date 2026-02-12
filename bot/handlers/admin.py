@@ -4,6 +4,7 @@ import csv
 import io
 from datetime import datetime, timedelta
 import asyncio
+import os
 
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
@@ -19,9 +20,14 @@ from bot.keyboards import (
     admin_user_actions_kb,
     admin_settings_kb,
     admin_referrals_kb,
+    mtproxy_status_kb,
+    admin_users_kb,
+    admin_users_list_kb,
+    admin_export_kb,
+    admin_user_proxies_kb,
 )
 from bot.runtime import runtime
-from bot.services.mtproto import sync_mtproto_secrets
+from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user
 
 router = Router()
 
@@ -82,6 +88,120 @@ def _settings_text(settings_map: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+async def _systemctl_props(service: str) -> dict[str, str]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl",
+            "show",
+            service,
+            "-p",
+            "ActiveState",
+            "-p",
+            "SubState",
+            "-p",
+            "Result",
+            "-p",
+            "ExecMainStatus",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception:
+        return {}
+    out, _ = await proc.communicate()
+    text = out.decode().strip()
+    props: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            props[key] = value
+    return props
+
+
+async def _get_mtproxy_logs(service: str, lines: int = 50) -> str:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "journalctl",
+            "-u",
+            service,
+            "-n",
+            str(lines),
+            "--no-pager",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception:
+        return "journalctl недоступен."
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        msg = err.decode().strip() or "Не удалось получить логи."
+        return msg
+    text = out.decode().strip()
+    return text or "Логи пустые."
+
+
+async def _mtproxy_status_text(db) -> str:
+    config = runtime.config
+    if config is None:
+        return "Конфигурация не загружена."
+
+    mt_enabled = await dao.get_setting(db, "mtproto_enabled", "1")
+    host = await dao.get_setting(db, "mtproto_host", "") or config.proxy_default_ip
+    port = await dao.get_setting(db, "mtproto_port", "9443")
+
+    secrets_file = config.mtproxy_secrets_file
+    secrets_count = 0
+    if os.path.exists(secrets_file):
+        with open(secrets_file, "r", encoding="utf-8") as fh:
+            secrets_count = len([line for line in fh.readlines() if line.strip()])
+
+    active_proxies = await dao.count_active_proxies(db)
+
+    service = config.mtproxy_service or ""
+    props = await _systemctl_props(service) if service else {}
+    state = props.get("ActiveState", "unknown") if props else "unknown"
+    substate = props.get("SubState", "")
+    result = props.get("Result", "")
+    exec_status = props.get("ExecMainStatus", "")
+
+    lines = [
+        "MTProxy статус:",
+        f"Сервис: {service or 'не задан'}",
+        f"Состояние: {state}{f' / {substate}' if substate else ''}",
+    ]
+    if state != "active":
+        extra = []
+        if result:
+            extra.append(f"Result={result}")
+        if exec_status and exec_status != "0":
+            extra.append(f"Exit={exec_status}")
+        if extra:
+            lines.append("Ошибка: " + ", ".join(extra))
+
+    lines += [
+        f"MTProto в боте: {'Вкл' if mt_enabled == '1' else 'Выкл'}",
+        f"Host: {host}",
+        f"Port: {port}",
+        f"Файл секретов: {secrets_file}",
+        f"Секретов в файле: {secrets_count}",
+        f"Активных прокси в БД: {active_proxies}",
+    ]
+    if mt_enabled == "1" and secrets_count != active_proxies:
+        lines.append("Внимание: число секретов не совпадает с активными прокси.")
+    return "\n".join(lines)
+
+
+async def _admin_proxy_links_text(db, proxy) -> str:
+    mt_enabled = await dao.get_setting(db, "mtproto_enabled", "1")
+    if mt_enabled != "1":
+        return "MTProto отключён."
+    host = await dao.get_setting(db, "mtproto_host", "") or runtime.config.proxy_default_ip
+    port = await dao.get_setting(db, "mtproto_port", "9443")
+    secret = proxy["mtproto_secret"] or ""
+    if not secret:
+        return "Secret отсутствует."
+    return f"https://t.me/proxy?server={host}&port={port}&secret={secret}"
+
+
 @router.message(Command("admin"))
 async def admin_start(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
@@ -134,12 +254,18 @@ async def admin_stats(call: CallbackQuery) -> None:
         )
         row = await cur.fetchone()
         disabled_count = int(row["cnt"])
+        cur = await db.execute(
+            "SELECT COUNT(DISTINCT user_id) AS cnt FROM proxies WHERE status = 'active' AND deleted_at IS NULL"
+        )
+        row = await cur.fetchone()
+        users_with_active = int(row["cnt"])
 
         await _safe_edit(
             call,
             "Статистика:\n"
             f"Всего пользователей: {total_users}\n"
             f"Активные за 7 дней: {active_7}\n"
+            f"Пользователи с активными прокси: {users_with_active}\n"
             f"Активных прокси: {active_proxies}\n"
             f"Отключённых прокси: {disabled_count}\n"
             f"Средний баланс: {avg_balance} ₽\n\n"
@@ -155,8 +281,79 @@ async def admin_users(call: CallbackQuery, state: FSMContext) -> None:
     if not _is_admin(call.from_user.id):
         return
     await call.answer()
+    await state.clear()
+    await _safe_edit(call, "Пользователи: выберите фильтр или поиск.", reply_markup=admin_users_kb())
+
+
+@router.callback_query(F.data == "admin_users:search")
+async def admin_users_search(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
     await state.set_state(AdminStates.waiting_user_query)
     await call.message.answer("Введите tg_id или username пользователя.")
+
+
+async def _render_users_list(db, users) -> list[dict]:
+    result = []
+    for user in users:
+        active = await dao.count_active_proxies(db, user_id=user["id"])
+        uname = f"@{user['username']}" if user["username"] else f"tg:{user['tg_id']}"
+        label = f"{uname} | баланс {user['balance']} ₽ | активных {active}"
+        result.append({"id": user["id"], "label": label})
+    return result
+
+
+@router.callback_query(F.data.startswith("admin_users:"))
+async def admin_users_filters(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    action = call.data.split(":", 1)[1]
+    if action == "search":
+        return
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        users = []
+        if action == "active_proxies":
+            cur = await db.execute(
+                "SELECT u.* FROM users u "
+                "WHERE u.deleted_at IS NULL "
+                "AND EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = u.id AND p.status = 'active' AND p.deleted_at IS NULL) "
+                "ORDER BY u.created_at DESC LIMIT 20"
+            )
+            users = await cur.fetchall()
+        elif action == "zero_balance":
+            cur = await db.execute(
+                "SELECT * FROM users WHERE deleted_at IS NULL AND balance = 0 ORDER BY created_at DESC LIMIT 20"
+            )
+            users = await cur.fetchall()
+        elif action == "disabled_proxies":
+            cur = await db.execute(
+                "SELECT u.* FROM users u "
+                "WHERE u.deleted_at IS NULL "
+                "AND EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = u.id AND p.status = 'disabled' AND p.deleted_at IS NULL) "
+                "ORDER BY u.created_at DESC LIMIT 20"
+            )
+            users = await cur.fetchall()
+        elif action == "new24":
+            since = (datetime.utcnow() - timedelta(days=1)).replace(microsecond=0).isoformat() + "Z"
+            cur = await db.execute(
+                "SELECT * FROM users WHERE deleted_at IS NULL AND created_at >= ? ORDER BY created_at DESC LIMIT 20",
+                (since,),
+            )
+            users = await cur.fetchall()
+
+        if not users:
+            await _safe_edit(call, "Пользователей не найдено.", reply_markup=admin_users_kb())
+            return
+        items = await _render_users_list(db, users)
+        await _safe_edit(call, "Список (до 20):", reply_markup=admin_users_list_kb(items))
+    finally:
+        await db.close()
 
 
 @router.message(AdminStates.waiting_user_query)
@@ -226,6 +423,19 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
                 await message.answer("Неверный формат суммы.")
                 return
             await dao.add_user_balance(db, user_id, delta)
+            if delta > 0:
+                reenabled = await reenable_proxies_for_user(db, user_id)
+                if reenabled:
+                    try:
+                        user_row = await dao.get_user_by_id(db, user_id)
+                        if user_row:
+                            await message.bot.send_message(
+                                user_row["tg_id"],
+                                "Баланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
+                                disable_notification=True,
+                            )
+                    except Exception:
+                        pass
             await message.answer("Баланс обновлён.")
             return
 
@@ -284,11 +494,26 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
         if action == "delta" and len(parts) == 4:
             delta = int(parts[3])
             await dao.add_user_balance(db, user_id, delta)
+            if delta > 0:
+                reenabled = await reenable_proxies_for_user(db, user_id)
+                if reenabled:
+                    try:
+                        user = await dao.get_user_by_id(db, user_id)
+                        if user:
+                            await call.bot.send_message(
+                                user["tg_id"],
+                                "Баланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
+                                disable_notification=True,
+                            )
+                    except Exception:
+                        pass
         elif action == "custom":
             await state.set_state(AdminStates.waiting_balance_delta)
             await state.update_data(balance_user_id=user_id)
             await call.message.answer("Введите сумму (можно со знаком -):")
             return
+        elif action == "reset":
+            await dao.set_user_balance(db, user_id, 0)
         elif action == "block":
             user = await dao.get_user_by_id(db, user_id)
             if user and user["blocked_at"]:
@@ -298,7 +523,24 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
         elif action == "delete":
             await dao.delete_user(db, user_id)
             await sync_mtproto_secrets(db)
-        elif action == "refresh":
+        elif action == "proxies":
+            proxies = await dao.list_proxies_by_user(db, user_id)
+            if not proxies:
+                user = await dao.get_user_by_id(db, user_id)
+                blocked = bool(user and user["blocked_at"])
+                await _safe_edit(call, "У пользователя нет прокси.", reply_markup=admin_user_actions_kb(user_id, blocked))
+                return
+            items = [{"id": p["id"], "login": p["login"], "status": p["status"]} for p in proxies]
+            await _safe_edit(call, "Прокси пользователя:", reply_markup=admin_user_proxies_kb(items, user_id))
+            return
+        elif action == "enable_all":
+            await dao.set_proxies_status_by_user(db, user_id, "active")
+            await dao.update_proxies_last_billed_by_user(db, user_id)
+            await sync_mtproto_secrets(db)
+        elif action == "disable_all":
+            await dao.set_proxies_status_by_user(db, user_id, "disabled")
+            await sync_mtproto_secrets(db)
+        elif action == "open":
             pass
 
         user = await dao.get_user_by_id(db, user_id)
@@ -307,6 +549,50 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
             return
         text = await _admin_user_profile(db, user_id)
         await _safe_edit(call, text, reply_markup=admin_user_actions_kb(user_id, bool(user["blocked_at"])))
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data.startswith("admin_proxy:"))
+async def admin_proxy_inline(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) < 3:
+        return
+    action = parts[1]
+    proxy_id = int(parts[2])
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        proxy = await dao.get_proxy_by_id(db, proxy_id)
+        if not proxy:
+            await _safe_edit(call, "Прокси не найден.", reply_markup=admin_menu_inline_kb())
+            return
+        user_id = proxy["user_id"]
+        if action == "show":
+            link = await _admin_proxy_links_text(db, proxy)
+            await _safe_edit(
+                call,
+                f"Прокси: {proxy['login']}\n"
+                f"Статус: {proxy['status']}\n"
+                f"Ссылка:\n{link}",
+                reply_markup=admin_user_proxies_kb(
+                    [{"id": proxy["id"], "login": proxy["login"], "status": proxy["status"]}],
+                    user_id,
+                ),
+            )
+            return
+        if action == "delete":
+            await dao.mark_proxy_deleted(db, proxy_id)
+            await sync_mtproto_secrets(db)
+            proxies = await dao.list_proxies_by_user(db, user_id)
+            items = [{"id": p["id"], "login": p["login"], "status": p["status"]} for p in proxies]
+            await _safe_edit(call, "Прокси пользователя:", reply_markup=admin_user_proxies_kb(items, user_id))
+            return
     finally:
         await db.close()
 
@@ -332,6 +618,19 @@ async def admin_user_custom_delta(message: Message, state: FSMContext) -> None:
     db = await get_db(config.db_path)
     try:
         await dao.add_user_balance(db, user_id, delta)
+        if delta > 0:
+            reenabled = await reenable_proxies_for_user(db, user_id)
+            if reenabled:
+                try:
+                    user = await dao.get_user_by_id(db, user_id)
+                    if user:
+                        await message.bot.send_message(
+                            user["tg_id"],
+                            "Баланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
+                            disable_notification=True,
+                        )
+                except Exception:
+                    pass
         user = await dao.get_user_by_id(db, user_id)
         if user:
             text = await _admin_user_profile(db, user_id)
@@ -459,6 +758,55 @@ async def admin_settings(call: CallbackQuery, state: FSMContext) -> None:
         await db.close()
 
 
+@router.callback_query(F.data == "admin:mtproxy")
+async def admin_mtproxy(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    await state.clear()
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        text = await _mtproxy_status_text(db)
+        await _safe_edit(call, text, reply_markup=mtproxy_status_kb())
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data == "admin:mtproxy_refresh")
+async def admin_mtproxy_refresh(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        text = await _mtproxy_status_text(db)
+        await _safe_edit(call, text, reply_markup=mtproxy_status_kb())
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data == "admin:mtproxy_logs")
+async def admin_mtproxy_logs(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    config = runtime.config
+    if config is None or not config.mtproxy_service:
+        await _safe_edit(call, "MTProxy service не задан.", reply_markup=mtproxy_status_kb())
+        return
+    text = await _get_mtproxy_logs(config.mtproxy_service, lines=50)
+    if len(text) > 3500:
+        text = text[-3500:]
+        text = "...\n" + text
+    await _safe_edit(call, f"Логи MTProxy:\n{text}", reply_markup=mtproxy_status_kb())
+
+
 @router.message(AdminStates.waiting_setting_input)
 async def admin_settings_set(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
@@ -526,10 +874,69 @@ async def admin_export(call: CallbackQuery) -> None:
     if not _is_admin(call.from_user.id):
         return
     await call.answer()
-    await _safe_edit(
-        call,
-        "Экспорт CSV: отправьте одно из слов: users, users_balances, proxies, payments, referrals"
-    )
+    await _safe_edit(call, "Экспорт CSV:", reply_markup=admin_export_kb())
+
+
+async def _send_export_csv(kind: str, message: Message | CallbackQuery, db) -> None:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+
+    if kind == "users":
+        rows = await db.execute("SELECT id, tg_id, username, created_at FROM users WHERE deleted_at IS NULL")
+        writer.writerow(["id", "tg_id", "username", "created_at"])
+        for row in await rows.fetchall():
+            writer.writerow([row["id"], row["tg_id"], row["username"], row["created_at"]])
+
+    if kind == "users_balances":
+        rows = await db.execute("SELECT id, tg_id, username, balance FROM users WHERE deleted_at IS NULL")
+        writer.writerow(["id", "tg_id", "username", "balance"])
+        for row in await rows.fetchall():
+            writer.writerow([row["id"], row["tg_id"], row["username"], row["balance"]])
+
+    if kind == "proxies":
+        rows = await db.execute(
+            "SELECT id, user_id, login, ip, port, status, created_at FROM proxies WHERE deleted_at IS NULL"
+        )
+        writer.writerow(["id", "user_id", "login", "ip", "port", "status", "created_at"])
+        for row in await rows.fetchall():
+            writer.writerow(
+                [row["id"], row["user_id"], row["login"], row["ip"], row["port"], row["status"], row["created_at"]]
+            )
+
+    if kind == "payments":
+        rows = await db.execute(
+            "SELECT id, user_id, amount, status, provider_payment_id, created_at FROM payments"
+        )
+        writer.writerow(["id", "user_id", "amount", "status", "provider_payment_id", "created_at"])
+        for row in await rows.fetchall():
+            writer.writerow(
+                [row["id"], row["user_id"], row["amount"], row["status"], row["provider_payment_id"], row["created_at"]]
+            )
+
+    if kind == "referrals":
+        rows = await db.execute(
+            "SELECT id, inviter_user_id, invited_user_id, link_code, bonus_inviter, bonus_invited, created_at FROM referral_events"
+        )
+        writer.writerow(["id", "inviter_user_id", "invited_user_id", "link_code", "bonus_inviter", "bonus_invited", "created_at"])
+        for row in await rows.fetchall():
+            writer.writerow(
+                [
+                    row["id"],
+                    row["inviter_user_id"],
+                    row["invited_user_id"],
+                    row["link_code"],
+                    row["bonus_inviter"],
+                    row["bonus_invited"],
+                    row["created_at"],
+                ]
+            )
+
+    data = buffer.getvalue().encode("utf-8")
+    file = BufferedInputFile(data, filename=f"{kind}.csv")
+    if isinstance(message, CallbackQuery):
+        await message.message.answer_document(file)
+    else:
+        await message.answer_document(file)
 
 
 @router.message(StateFilter(None), F.text)
@@ -546,62 +953,25 @@ async def admin_export_csv(message: Message) -> None:
         return
     db = await get_db(config.db_path)
     try:
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
+        await _send_export_csv(kind, message, db)
+    finally:
+        await db.close()
 
-        if kind == "users":
-            rows = await db.execute("SELECT id, tg_id, username, created_at FROM users WHERE deleted_at IS NULL")
-            writer.writerow(["id", "tg_id", "username", "created_at"])
-            for row in await rows.fetchall():
-                writer.writerow([row["id"], row["tg_id"], row["username"], row["created_at"]])
 
-        if kind == "users_balances":
-            rows = await db.execute("SELECT id, tg_id, username, balance FROM users WHERE deleted_at IS NULL")
-            writer.writerow(["id", "tg_id", "username", "balance"])
-            for row in await rows.fetchall():
-                writer.writerow([row["id"], row["tg_id"], row["username"], row["balance"]])
-
-        if kind == "proxies":
-            rows = await db.execute(
-                "SELECT id, user_id, login, ip, port, status, created_at FROM proxies WHERE deleted_at IS NULL"
-            )
-            writer.writerow(["id", "user_id", "login", "ip", "port", "status", "created_at"])
-            for row in await rows.fetchall():
-                writer.writerow(
-                    [row["id"], row["user_id"], row["login"], row["ip"], row["port"], row["status"], row["created_at"]]
-                )
-
-        if kind == "payments":
-            rows = await db.execute(
-                "SELECT id, user_id, amount, status, provider_payment_id, created_at FROM payments"
-            )
-            writer.writerow(["id", "user_id", "amount", "status", "provider_payment_id", "created_at"])
-            for row in await rows.fetchall():
-                writer.writerow(
-                    [row["id"], row["user_id"], row["amount"], row["status"], row["provider_payment_id"], row["created_at"]]
-                )
-
-        if kind == "referrals":
-            rows = await db.execute(
-                "SELECT id, inviter_user_id, invited_user_id, link_code, bonus_inviter, bonus_invited, created_at FROM referral_events"
-            )
-            writer.writerow(["id", "inviter_user_id", "invited_user_id", "link_code", "bonus_inviter", "bonus_invited", "created_at"])
-            for row in await rows.fetchall():
-                writer.writerow(
-                    [
-                        row["id"],
-                        row["inviter_user_id"],
-                        row["invited_user_id"],
-                        row["link_code"],
-                        row["bonus_inviter"],
-                        row["bonus_invited"],
-                        row["created_at"],
-                    ]
-                )
-
-        data = buffer.getvalue().encode("utf-8")
-        file = BufferedInputFile(data, filename=f"{kind}.csv")
-        await message.answer_document(file)
+@router.callback_query(F.data.startswith("admin_export:"))
+async def admin_export_cb(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    kind = call.data.split(":", 1)[1]
+    if kind not in {"users", "users_balances", "proxies", "payments", "referrals"}:
+        return
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        await _send_export_csv(kind, call, db)
     finally:
         await db.close()
 
@@ -670,15 +1040,21 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
         await call.message.answer(f"Начинаю рассылку. Получателей: {len(tg_ids)}")
         delay = config.broadcast_delay_ms / 1000.0
 
+        sent = 0
+        failed = 0
         for tg_id in tg_ids:
             try:
                 await call.message.bot.send_message(tg_id, text)
+                sent += 1
             except Exception:
+                failed += 1
                 continue
             if delay:
                 await asyncio.sleep(delay)
 
-        await call.message.answer("Рассылка завершена.")
+        await call.message.answer(
+            f"Рассылка завершена. Успешно: {sent}, ошибок: {failed}."
+        )
         await state.clear()
     finally:
         await db.close()
@@ -695,6 +1071,23 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
     db = await get_db(config.db_path)
     try:
         links = await dao.list_referral_links(db)
+        cur = await db.execute(
+            "SELECT COUNT(*) AS cnt, COALESCE(SUM(bonus_inviter + bonus_invited), 0) AS total "
+            "FROM referral_events"
+        )
+        totals = await cur.fetchone()
+        total_cnt = int(totals["cnt"]) if totals else 0
+        total_bonus = int(totals["total"]) if totals else 0
+        top_lines = []
+        cur = await db.execute(
+            "SELECT inviter_user_id, COUNT(*) AS cnt, COALESCE(SUM(bonus_inviter), 0) AS bonus "
+            "FROM referral_events GROUP BY inviter_user_id ORDER BY cnt DESC LIMIT 5"
+        )
+        rows = await cur.fetchall()
+        for row in rows:
+            inviter = await dao.get_user_by_id(db, row["inviter_user_id"])
+            name = f"@{inviter['username']}" if inviter and inviter["username"] else f"id:{row['inviter_user_id']}"
+            top_lines.append(f"{name} — {row['cnt']} приглашений, бонус {row['bonus']} ₽")
         if links:
             lines = []
             bot_info = await call.bot.get_me()
@@ -715,9 +1108,21 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
                     f"limit({link['limit_total'] or 0}/{link['limit_per_user'] or 0}) "
                     f"uses={uses} total_bonus={total_bonus}₽"
                 )
-            await _safe_edit(call, "Ссылки:\n" + "\n".join(lines), reply_markup=admin_menu_inline_kb())
+            header = f"Рефералы: всего {total_cnt}, начислено {total_bonus} ₽"
+            top_block = "\n".join(top_lines) if top_lines else "Нет данных"
+            await _safe_edit(
+                call,
+                header + "\n\nТоп приглашений:\n" + top_block + "\n\nСсылки:\n" + "\n".join(lines),
+                reply_markup=admin_menu_inline_kb(),
+            )
         else:
-            await _safe_edit(call, "Активных ссылок нет.", reply_markup=admin_menu_inline_kb())
+            header = f"Рефералы: всего {total_cnt}, начислено {total_bonus} ₽"
+            top_block = "\n".join(top_lines) if top_lines else "Нет данных"
+            await _safe_edit(
+                call,
+                header + "\n\nТоп приглашений:\n" + top_block + "\n\nАктивных ссылок нет.",
+                reply_markup=admin_menu_inline_kb(),
+            )
     finally:
         await db.close()
 

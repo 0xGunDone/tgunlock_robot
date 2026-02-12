@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
@@ -142,9 +143,94 @@ async def billing_loop() -> None:
     while True:
         db = await get_db(config.db_path)
         try:
-            changed = await run_billing_once(db)
-            if changed:
+            result = await run_billing_once(db)
+            if result.changed:
                 await sync_mtproto_secrets(db)
+            if result.disabled_by_balance:
+                await _notify_disabled_proxies(bot, db, result.disabled_by_balance)
+            if result.low_balance_warnings:
+                await _notify_low_balance(bot, db, result.low_balance_warnings)
+            await _check_mtproxy_health(bot)
         finally:
             await db.close()
         await asyncio.sleep(config.billing_interval_sec)
+
+
+async def _check_mtproxy_health(bot: Bot) -> None:
+    if not runtime.config or not runtime.config.mtproxy_service:
+        return
+    service = runtime.config.mtproxy_service
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl",
+            "show",
+            service,
+            "-p",
+            "ActiveState",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception:
+        return
+    out, _ = await proc.communicate()
+    text = out.decode().strip()
+    state = "unknown"
+    if "=" in text:
+        state = text.split("=", 1)[1].strip()
+
+    last_state = runtime.mtproxy_last_state
+    now_ts = time.time()
+    last_alert = runtime.mtproxy_last_alert_ts or 0
+
+    if state != "active":
+        if last_state != state or (now_ts - last_alert) > 3600:
+            runtime.mtproxy_last_state = state
+            runtime.mtproxy_last_alert_ts = now_ts
+            for admin_id in runtime.config.admin_tg_ids:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"MTProxy проблема: {service} state={state}",
+                        disable_notification=True,
+                    )
+                except Exception:
+                    continue
+    else:
+        runtime.mtproxy_last_state = state
+
+
+async def _notify_disabled_proxies(bot: Bot, db, disabled_map: dict[int, list]) -> None:
+    for user_id, proxies in disabled_map.items():
+        user = await dao.get_user_by_id(db, user_id)
+        if not user or user["blocked_at"] or user["deleted_at"]:
+            continue
+        active = await dao.count_active_proxies(db, user_id=user_id)
+        header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+        lines = [header, "", "Прокси отключены из-за нехватки средств."]
+        names = [p["login"] for p in proxies]
+        if names:
+            lines.append("Отключены: " + ", ".join(names))
+        lines.append("Пополните баланс — прокси включатся автоматически.")
+        try:
+            await bot.send_message(user["tg_id"], "\n".join(lines), disable_notification=True)
+        except Exception:
+            continue
+
+
+async def _notify_low_balance(bot: Bot, db, warnings: dict[int, dict]) -> None:
+    for user_id, info in warnings.items():
+        user = await dao.get_user_by_id(db, user_id)
+        if not user or user["blocked_at"] or user["deleted_at"]:
+            continue
+        active = await dao.count_active_proxies(db, user_id=user_id)
+        header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+        text = (
+            f"{header}\n\n"
+            "⚠️ Баланс может не хватить на следующий день.\n"
+            f"Нужно: {info['required']} ₽, сейчас: {info['balance']} ₽.\n"
+            "Пополните баланс, чтобы прокси не отключились."
+        )
+        try:
+            await bot.send_message(user["tg_id"], text, disable_notification=True)
+        except Exception:
+            continue

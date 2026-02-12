@@ -6,7 +6,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton(text="🧦 Мои прокси", callback_data="menu:proxies"),
+            InlineKeyboardButton(text="🛰 Мои прокси", callback_data="menu:proxies"),
             InlineKeyboardButton(text="➕ Купить прокси", callback_data="proxy:buy"),
         ],
         [
@@ -14,6 +14,7 @@ def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🤝 Рефералы", callback_data="menu:referrals"),
         ],
         [
+            InlineKeyboardButton(text="🔍 Проверить", callback_data="menu:check"),
             InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help"),
         ],
     ]
@@ -29,12 +30,15 @@ def admin_menu_inline_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="👤 Пользователи", callback_data="admin:users"),
         ],
         [
-            InlineKeyboardButton(text="🧦 Прокси", callback_data="admin:proxies"),
+            InlineKeyboardButton(text="🛰 Прокси", callback_data="admin:proxies"),
             InlineKeyboardButton(text="💳 Платежи", callback_data="admin:payments"),
         ],
         [
             InlineKeyboardButton(text="🔗 Рефералы", callback_data="admin:referrals"),
             InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin:settings"),
+        ],
+        [
+            InlineKeyboardButton(text="📡 MTProxy", callback_data="admin:mtproxy"),
         ],
         [
             InlineKeyboardButton(text="📦 Экспорт", callback_data="admin:export"),
@@ -61,18 +65,25 @@ def admin_user_actions_kb(user_id: int, blocked: bool) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="+10", callback_data=f"admin_user:delta:{user_id}:10"),
             InlineKeyboardButton(text="+100", callback_data=f"admin_user:delta:{user_id}:100"),
+            InlineKeyboardButton(text="+500", callback_data=f"admin_user:delta:{user_id}:500"),
         ],
         [
             InlineKeyboardButton(text="-10", callback_data=f"admin_user:delta:{user_id}:-10"),
             InlineKeyboardButton(text="-100", callback_data=f"admin_user:delta:{user_id}:-100"),
+            InlineKeyboardButton(text="-500", callback_data=f"admin_user:delta:{user_id}:-500"),
         ],
         [
             InlineKeyboardButton(text="Свой баланс", callback_data=f"admin_user:custom:{user_id}"),
-            InlineKeyboardButton(text="Обновить", callback_data=f"admin_user:refresh:{user_id}"),
+            InlineKeyboardButton(text="Обнулить", callback_data=f"admin_user:reset:{user_id}"),
         ],
         [
             InlineKeyboardButton(text=block_label, callback_data=f"admin_user:block:{user_id}"),
             InlineKeyboardButton(text="Удалить", callback_data=f"admin_user:delete:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="Прокси", callback_data=f"admin_user:proxies:{user_id}"),
+            InlineKeyboardButton(text="Вкл все", callback_data=f"admin_user:enable_all:{user_id}"),
+            InlineKeyboardButton(text="Выкл все", callback_data=f"admin_user:disable_all:{user_id}"),
         ],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin"),
@@ -165,6 +176,94 @@ def admin_settings_kb(settings: dict[str, str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def mtproxy_status_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:mtproxy_refresh")],
+            [InlineKeyboardButton(text="📄 Логи", callback_data="admin:mtproxy_logs")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")],
+        ]
+    )
+
+
+def help_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Как включить/выключить", callback_data="help:toggle")],
+            [InlineKeyboardButton(text="Не подключается", callback_data="help:fail")],
+            [InlineKeyboardButton(text="Как оплатить", callback_data="help:pay")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+        ]
+    )
+
+
+def help_detail_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:help")],
+        ]
+    )
+
+
+def admin_users_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔎 Поиск", callback_data="admin_users:search")],
+            [
+                InlineKeyboardButton(text="С активными прокси", callback_data="admin_users:active_proxies"),
+                InlineKeyboardButton(text="Баланс = 0", callback_data="admin_users:zero_balance"),
+            ],
+            [
+                InlineKeyboardButton(text="Есть отключённые", callback_data="admin_users:disabled_proxies"),
+                InlineKeyboardButton(text="Новые 24ч", callback_data="admin_users:new24"),
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")],
+        ]
+    )
+
+
+def admin_users_list_kb(users: list[dict]) -> InlineKeyboardMarkup:
+    buttons = []
+    for u in users:
+        label = f"{u['label']}"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"admin_user:open:{u['id']}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:users")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_export_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Users", callback_data="admin_export:users"),
+                InlineKeyboardButton(text="Users balances", callback_data="admin_export:users_balances"),
+            ],
+            [
+                InlineKeyboardButton(text="Proxies", callback_data="admin_export:proxies"),
+                InlineKeyboardButton(text="Payments", callback_data="admin_export:payments"),
+            ],
+            [
+                InlineKeyboardButton(text="Referrals", callback_data="admin_export:referrals"),
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")],
+        ]
+    )
+
+
+def admin_user_proxies_kb(proxies: list[dict], user_id: int) -> InlineKeyboardMarkup:
+    buttons = []
+    for p in proxies:
+        label = f"{p['login']} ({p['status']})"
+        buttons.append(
+            [
+                InlineKeyboardButton(text=label, callback_data=f"admin_proxy:show:{p['id']}"),
+                InlineKeyboardButton(text="🗑", callback_data=f"admin_proxy:delete:{p['id']}"),
+            ]
+        )
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_user:open:{user_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def proxies_list_kb(proxies: list[dict]) -> InlineKeyboardMarkup:
     buttons = []
     for p in proxies:
@@ -202,6 +301,25 @@ def proxy_delete_confirm_kb(proxy_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def topup_quick_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="📅 На 7 дней", callback_data="topup:days:7")],
+        [
+            InlineKeyboardButton(text="100 ₽", callback_data="topup:amount:100"),
+            InlineKeyboardButton(text="300 ₽", callback_data="topup:amount:300"),
+            InlineKeyboardButton(text="500 ₽", callback_data="topup:amount:500"),
+        ],
+        [
+            InlineKeyboardButton(text="1000 ₽", callback_data="topup:amount:1000"),
+            InlineKeyboardButton(text="2000 ₽", callback_data="topup:amount:2000"),
+            InlineKeyboardButton(text="5000 ₽", callback_data="topup:amount:5000"),
+        ],
+        [InlineKeyboardButton(text="✍️ Ввести сумму", callback_data="topup:custom")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def proxies_select_kb(action: str, proxies: list[dict]) -> InlineKeyboardMarkup:

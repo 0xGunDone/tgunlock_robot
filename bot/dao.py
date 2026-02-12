@@ -75,6 +75,26 @@ async def update_user_last_seen(db: aiosqlite.Connection, tg_id: int) -> None:
     await db.commit()
 
 
+async def update_user_last_menu_message_id(
+    db: aiosqlite.Connection, tg_id: int, message_id: int
+) -> None:
+    await db.execute(
+        "UPDATE users SET last_menu_message_id = ? WHERE tg_id = ?",
+        (message_id, tg_id),
+    )
+    await db.commit()
+
+
+async def update_user_low_balance_warn_at(
+    db: aiosqlite.Connection, user_id: int, value: str
+) -> None:
+    await db.execute(
+        "UPDATE users SET last_low_balance_warn_at = ? WHERE id = ?",
+        (value, user_id),
+    )
+    await db.commit()
+
+
 async def set_user_balance(db: aiosqlite.Connection, user_id: int, balance: int) -> None:
     await db.execute("UPDATE users SET balance = ? WHERE id = ?", (balance, user_id))
     await db.commit()
@@ -193,6 +213,16 @@ async def set_proxy_status(db: aiosqlite.Connection, proxy_id: int, status: str)
     await db.commit()
 
 
+async def set_proxies_status_by_user(
+    db: aiosqlite.Connection, user_id: int, status: str
+) -> None:
+    await db.execute(
+        "UPDATE proxies SET status = ? WHERE user_id = ? AND deleted_at IS NULL",
+        (status, user_id),
+    )
+    await db.commit()
+
+
 async def mark_proxy_deleted(db: aiosqlite.Connection, proxy_id: int) -> None:
     await db.execute(
         "UPDATE proxies SET status = 'deleted', deleted_at = ? WHERE id = ?",
@@ -218,9 +248,18 @@ async def update_proxy_last_billed(db: aiosqlite.Connection, proxy_id: int) -> N
     await db.commit()
 
 
+async def update_proxies_last_billed_by_user(db: aiosqlite.Connection, user_id: int) -> None:
+    await db.execute(
+        "UPDATE proxies SET last_billed_at = ? WHERE user_id = ? AND deleted_at IS NULL",
+        (now_iso(), user_id),
+    )
+    await db.commit()
+
+
 async def get_active_proxies_for_billing(db: aiosqlite.Connection) -> List[aiosqlite.Row]:
     cur = await db.execute(
-        "SELECT p.*, u.balance AS user_balance, u.blocked_at AS user_blocked, u.deleted_at AS user_deleted "
+        "SELECT p.*, u.balance AS user_balance, u.blocked_at AS user_blocked, "
+        "u.deleted_at AS user_deleted, u.last_low_balance_warn_at AS user_warn_at "
         "FROM proxies p JOIN users u ON u.id = p.user_id "
         "WHERE p.status = 'active' AND p.deleted_at IS NULL AND u.deleted_at IS NULL"
     )

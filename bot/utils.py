@@ -24,10 +24,6 @@ def generate_mtproto_secret() -> str:
     return secrets.token_hex(16)
 
 
-def build_proxy_link(ip: str, port: int, login: str, password: str) -> str:
-    return f"https://t.me/socks?server={ip}&port={port}&user={login}&pass={password}"
-
-
 def extract_ref_code(start_param: str | None) -> str | None:
     if not start_param:
         return None

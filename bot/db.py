@@ -43,6 +43,8 @@ async def init_db(db: aiosqlite.Connection) -> None:
             balance INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             last_seen_at TEXT,
+            last_menu_message_id INTEGER,
+            last_low_balance_warn_at TEXT,
             referred_by TEXT,
             blocked_at TEXT,
             deleted_at TEXT
@@ -122,6 +124,8 @@ async def init_db(db: aiosqlite.Connection) -> None:
         """
     )
     await db.commit()
+    await _ensure_column(db, "users", "last_menu_message_id", "last_menu_message_id INTEGER")
+    await _ensure_column(db, "users", "last_low_balance_warn_at", "last_low_balance_warn_at TEXT")
     await _ensure_column(db, "proxies", "mtproto_secret", "mtproto_secret TEXT")
 
 

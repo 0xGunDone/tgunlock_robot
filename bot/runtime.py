@@ -11,6 +11,8 @@ from bot.config import Config
 class Runtime:
     config: Optional[Config] = None
     proxy_provider: Optional[ProxyProvider] = None
+    mtproxy_last_state: Optional[str] = None
+    mtproxy_last_alert_ts: Optional[float] = None
 
 
 runtime = Runtime()
