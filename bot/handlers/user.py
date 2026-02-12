@@ -159,11 +159,12 @@ async def _apply_referral(db, ref_arg: str | None, user_id: int) -> None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, state: FSMContext) -> None:
     config = runtime.config
     if config is None:
         await message.answer("Бот не настроен.")
         return
+    await state.clear()
 
     db = await get_db(config.db_path)
     try:
