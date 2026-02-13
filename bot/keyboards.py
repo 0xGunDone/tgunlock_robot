@@ -350,6 +350,41 @@ def topup_method_kb(stars_enabled: bool, freekassa_enabled: bool) -> InlineKeybo
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def freekassa_method_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="СБП QR (НСПК)", callback_data="fk:method:44")],
+        [InlineKeyboardButton(text="Банковская карта РФ", callback_data="fk:method:36")],
+        [InlineKeyboardButton(text="СберPay", callback_data="fk:method:43")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:topup")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def freekassa_amount_kb(method_value: int, fee_percent: float = 12.5) -> InlineKeyboardMarkup:
+    def label(amount: int) -> str:
+        fee = amount * (1 + fee_percent / 100)
+        fee_str = f"{fee:.2f}".rstrip("0").rstrip(".")
+        return f"{amount} ₽ ({fee_str} ₽)"
+
+    buttons = [
+        [InlineKeyboardButton(text="📅 На 7 дней", callback_data=f"topup:days:freekassa:{method_value}:7")],
+        [
+            InlineKeyboardButton(text=label(100), callback_data=f"topup:amount:freekassa:{method_value}:100"),
+            InlineKeyboardButton(text=label(300), callback_data=f"topup:amount:freekassa:{method_value}:300"),
+            InlineKeyboardButton(text=label(500), callback_data=f"topup:amount:freekassa:{method_value}:500"),
+        ],
+        [
+            InlineKeyboardButton(text=label(1000), callback_data=f"topup:amount:freekassa:{method_value}:1000"),
+            InlineKeyboardButton(text=label(2000), callback_data=f"topup:amount:freekassa:{method_value}:2000"),
+            InlineKeyboardButton(text=label(5000), callback_data=f"topup:amount:freekassa:{method_value}:5000"),
+        ],
+        [InlineKeyboardButton(text="✍️ Ввести сумму", callback_data=f"topup:custom:freekassa:{method_value}")],
+        [InlineKeyboardButton(text="⬅️ К способам оплаты", callback_data="menu:topup")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def topup_quick_kb(method: str, show_method_back: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="📅 На 7 дней", callback_data=f"topup:days:{method}:7")],

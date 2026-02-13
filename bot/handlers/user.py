@@ -19,6 +19,8 @@ from bot.keyboards import (
     topup_quick_kb,
     topup_method_kb,
     freekassa_pay_kb,
+    freekassa_method_kb,
+    freekassa_amount_kb,
     help_kb,
     help_detail_kb,
 )
@@ -31,7 +33,14 @@ from bot.services.settings import (
     convert_rub_to_stars,
 )
 from bot.services.mtproto import sync_mtproto_secrets, ensure_proxy_mtproto_secret, reenable_proxies_for_user
-from bot.services.freekassa import create_order, get_currencies, pick_rub_method
+from bot.services.freekassa import create_order
+
+FREEKASSA_FEE_PERCENT = 12.5
+FREEKASSA_METHOD_OPTIONS = [
+    {"key": "sbp_qr", "value": 44, "label": "СБП QR (НСПК)"},
+    {"key": "card_rub", "value": 36, "label": "Банковская карта РФ"},
+    {"key": "sberpay", "value": 43, "label": "СберPay"},
+]
 from bot.utils import (
     generate_login,
     generate_password,
@@ -269,6 +278,18 @@ def _parse_date(value: str | None) -> datetime.date | None:
         return None
 
 
+def _fk_fee_amount(amount: int) -> str:
+    total = amount * (1 + FREEKASSA_FEE_PERCENT / 100)
+    return f"{total:.2f}".rstrip("0").rstrip(".")
+
+
+def _fk_method_label(method_value: int) -> str:
+    for item in FREEKASSA_METHOD_OPTIONS:
+        if int(item["value"]) == int(method_value):
+            return item["label"]
+    return f"Метод {method_value}"
+
+
 async def _issue_invoice(bot: Bot, chat_id: int, db, user_id: int, rub: int) -> None:
     rate = await get_decimal_setting(db, "stars_rate", "1")
     stars = convert_rub_to_stars(rub, rate)
@@ -288,32 +309,15 @@ async def _issue_invoice(bot: Bot, chat_id: int, db, user_id: int, rub: int) -> 
     )
 
 
-async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int) -> dict:
+async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int, method: int) -> dict:
     config = runtime.config
     if config is None:
         return {"error": "FreeKassa не настроена."}
     if not config.freekassa_shop_id or not config.freekassa_api_key:
         return {"error": "FreeKassa не настроена у администратора."}
-    currency = "RUB"
-    method = None
-    currencies = await get_currencies(
-        api_base=config.freekassa_api_base,
-        api_key=config.freekassa_api_key,
-        shop_id=config.freekassa_shop_id,
-    )
-    if currencies.get("error"):
-        return {"error": f"Ошибка FreeKassa: {currencies['error']}"}
-    items = currencies.get("currencies") or currencies.get("data") or []
-    picked = pick_rub_method(items)
-    if not picked:
-        return {"error": "Ошибка FreeKassa: нет доступных способов оплаты в RUB."}
-    try:
-        method = int(picked.get("id"))
-    except Exception:
-        method = None
-    currency = str(picked.get("currency") or "RUB")
     if not method:
         return {"error": "Ошибка FreeKassa: не удалось определить способ оплаты."}
+    currency = "RUB"
     email = f"{tg_id}@telegram.org"
     ip = config.freekassa_ip or config.proxy_default_ip or "127.0.0.1"
     payment_id = await dao.create_payment(
@@ -793,6 +797,13 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
             )
             return
         method = "stars" if stars_enabled else "freekassa"
+        if method == "freekassa":
+            await _safe_edit(
+                call,
+                f"{header}\n\nВыберите способ оплаты FreeKassa.",
+                reply_markup=freekassa_method_kb(),
+            )
+            return
         extra = hint if (method == "stars") else ""
         await _safe_edit(
             call,
@@ -831,13 +842,21 @@ async def topup_method_select(call: CallbackQuery, state: FSMContext) -> None:
             await _safe_edit(call, "Оплата FreeKassa отключена.")
             return
 
+        if method == "freekassa":
+            await state.update_data(topup_method=method)
+            await _safe_edit(
+                call,
+                f"{header}\n\nВыберите способ оплаты FreeKassa.",
+                reply_markup=freekassa_method_kb(),
+            )
+            return
+
         hint = ""
-        if method == "stars":
-            hint_enabled = await get_bool_setting(db, "stars_buy_hint_enabled", False)
-            stars_url = await dao.get_setting(db, "stars_buy_url", "") or ""
-            if hint_enabled and stars_url:
-                safe_url = html_escape(stars_url, quote=True)
-                hint = f"\n\nЗВЕЗДЫ МОЖНО КУПИТЬ <a href=\"{safe_url}\">ТУТ</a>"
+        hint_enabled = await get_bool_setting(db, "stars_buy_hint_enabled", False)
+        stars_url = await dao.get_setting(db, "stars_buy_url", "") or ""
+        if hint_enabled and stars_url:
+            safe_url = html_escape(stars_url, quote=True)
+            hint = f"\n\nЗВЕЗДЫ МОЖНО КУПИТЬ <a href=\"{safe_url}\">ТУТ</a>"
 
         await state.update_data(topup_method=method)
         await _safe_edit(
@@ -845,6 +864,43 @@ async def topup_method_select(call: CallbackQuery, state: FSMContext) -> None:
             f"{header}\n\nВыберите сумму пополнения или нажмите «Ввести сумму».{hint}",
             parse_mode="HTML",
             reply_markup=topup_quick_kb(method, show_method_back=True),
+        )
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data.startswith("fk:method:"))
+async def freekassa_method_select(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) != 3:
+        return
+    if not parts[2].isdigit():
+        return
+    method_value = int(parts[2])
+    if method_value not in {44, 36, 43}:
+        return
+
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        user, header = await _get_user_and_header(db, call.from_user.id)
+        if not user:
+            await _safe_edit(call, "Нажмите /start")
+            return
+        if not await get_bool_setting(db, "freekassa_enabled", False):
+            await _safe_edit(call, "Оплата FreeKassa отключена.")
+            return
+
+        await state.update_data(topup_method="freekassa", fk_method=method_value)
+        label = _fk_method_label(method_value)
+        await _safe_edit(
+            call,
+            f"{header}\n\nСпособ оплаты: {label}\n"
+            "Выберите сумму пополнения или нажмите «Ввести сумму».",
+            reply_markup=freekassa_amount_kb(method_value, FREEKASSA_FEE_PERCENT),
         )
     finally:
         await db.close()
@@ -860,12 +916,21 @@ async def topup_custom(call: CallbackQuery, state: FSMContext) -> None:
         method = "stars"
     if method not in {"stars", "freekassa"}:
         method = "stars"
+    fk_method = None
+    if method == "freekassa" and len(parts) >= 4 and parts[3].isdigit():
+        fk_method = int(parts[3])
     await state.update_data(topup_method=method)
+    if fk_method:
+        await state.update_data(fk_method=fk_method)
     await state.set_state(UserStates.waiting_topup_amount)
     await _safe_edit(
         call,
         "Введите сумму пополнения в рублях (целое число).",
-        reply_markup=topup_quick_kb(method, show_method_back=True),
+        reply_markup=freekassa_amount_kb(fk_method, FREEKASSA_FEE_PERCENT)
+        if method == "freekassa" and fk_method
+        else freekassa_method_kb()
+        if method == "freekassa"
+        else topup_quick_kb(method, show_method_back=True),
     )
 
 
@@ -873,9 +938,16 @@ async def topup_custom(call: CallbackQuery, state: FSMContext) -> None:
 async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     parts = call.data.split(":")
-    if len(parts) not in {3, 4}:
+    if len(parts) not in {3, 4, 5}:
         return
-    if len(parts) == 4:
+    fk_method = None
+    if len(parts) == 5:
+        method = parts[2]
+        fk_method_part = parts[3]
+        amount_part = parts[4]
+        if fk_method_part.isdigit():
+            fk_method = int(fk_method_part)
+    elif len(parts) == 4:
         method = parts[2]
         amount_part = parts[3]
     else:
@@ -900,19 +972,37 @@ async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
             await _safe_edit(call, "Нажмите /start")
             return
         if method == "freekassa":
+            if fk_method:
+                await state.update_data(topup_method="freekassa", fk_method=fk_method)
             if not await get_bool_setting(db, "freekassa_enabled", False):
                 await _safe_edit(call, "Оплата FreeKassa отключена.")
                 return
-            fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, rub)
+            if not fk_method:
+                data = await state.get_data()
+                fk_method = data.get("fk_method")
+            if not fk_method:
+                await _safe_edit(
+                    call,
+                    "Выберите способ оплаты FreeKassa.",
+                    reply_markup=freekassa_method_kb(),
+                )
+                return
+            fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, rub, int(fk_method))
             if fk.get("error"):
-                await _safe_edit(call, fk["error"], reply_markup=topup_quick_kb(method, show_method_back=True))
+                await _safe_edit(
+                    call,
+                    fk["error"],
+                    reply_markup=freekassa_amount_kb(int(fk_method), FREEKASSA_FEE_PERCENT),
+                )
                 return
             pay_url = fk["pay_url"]
             payment_id = fk["payment_id"]
+            fee_total = _fk_fee_amount(rub)
             await state.clear()
             await _safe_edit(
                 call,
-                f"Оплата FreeKassa на {rub} ₽\n{pay_url}\n\nПлатёж обработается автоматически после оплаты.",
+                f"Оплата FreeKassa на {rub} ₽ (к оплате {fee_total} ₽)\n"
+                f"{pay_url}\n\nПлатёж обработается автоматически после оплаты.",
                 reply_markup=freekassa_pay_kb(payment_id, pay_url),
             )
             return
@@ -931,9 +1021,16 @@ async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
 async def topup_days(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     parts = call.data.split(":")
-    if len(parts) not in {3, 4}:
+    if len(parts) not in {3, 4, 5}:
         return
-    if len(parts) == 4:
+    fk_method = None
+    if len(parts) == 5:
+        method = parts[2]
+        fk_method_part = parts[3]
+        days_part = parts[4]
+        if fk_method_part.isdigit():
+            fk_method = int(fk_method_part)
+    elif len(parts) == 4:
         method = parts[2]
         days_part = parts[3]
     else:
@@ -978,25 +1075,44 @@ async def topup_days(call: CallbackQuery, state: FSMContext) -> None:
                 call,
                 f"Баланса уже хватает на {days} дней для {desired} прокси.\n"
                 "Если хотите, можете пополнить дополнительно.",
-                reply_markup=topup_quick_kb(method, show_method_back=True),
+                reply_markup=freekassa_amount_kb(fk_method, FREEKASSA_FEE_PERCENT)
+                if method == "freekassa" and fk_method
+                else topup_quick_kb(method, show_method_back=True),
             )
             return
 
         need = required - int(user["balance"])
         if method == "freekassa":
+            if fk_method:
+                await state.update_data(topup_method="freekassa", fk_method=fk_method)
             if not await get_bool_setting(db, "freekassa_enabled", False):
                 await _safe_edit(call, "Оплата FreeKassa отключена.")
                 return
-            fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, need)
+            if not fk_method:
+                data = await state.get_data()
+                fk_method = data.get("fk_method")
+            if not fk_method:
+                await _safe_edit(
+                    call,
+                    "Выберите способ оплаты FreeKassa.",
+                    reply_markup=freekassa_method_kb(),
+                )
+                return
+            fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, need, int(fk_method))
             if fk.get("error"):
-                await _safe_edit(call, fk["error"], reply_markup=topup_quick_kb(method, show_method_back=True))
+                await _safe_edit(
+                    call,
+                    fk["error"],
+                    reply_markup=freekassa_amount_kb(int(fk_method), FREEKASSA_FEE_PERCENT),
+                )
                 return
             pay_url = fk["pay_url"]
             payment_id = fk["payment_id"]
+            fee_total = _fk_fee_amount(need)
             await state.clear()
             await _safe_edit(
                 call,
-                f"Оплата FreeKassa на {need} ₽\n{pay_url}\n\n"
+                f"Оплата FreeKassa на {need} ₽ (к оплате {fee_total} ₽)\n{pay_url}\n\n"
                 f"Расчёт на {days} дней для {desired} прокси.\n"
                 "Платёж обработается автоматически после оплаты.",
                 reply_markup=freekassa_pay_kb(payment_id, pay_url),
@@ -1025,6 +1141,7 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
         return
     data = await state.get_data()
     method = data.get("topup_method", "stars")
+    fk_method = data.get("fk_method")
     try:
         rub = int(message.text.strip())
     except Exception:
@@ -1034,7 +1151,11 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
                 message,
                 db,
                 "Введите целое число.",
-                reply_markup=topup_quick_kb(method, show_method_back=True),
+                reply_markup=freekassa_amount_kb(int(fk_method), FREEKASSA_FEE_PERCENT)
+                if method == "freekassa" and fk_method
+                else freekassa_method_kb()
+                if method == "freekassa"
+                else topup_quick_kb(method, show_method_back=True),
             )
         finally:
             await db.close()
@@ -1047,7 +1168,11 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
                 message,
                 db,
                 "Сумма должна быть больше 0.",
-                reply_markup=topup_quick_kb(method, show_method_back=True),
+                reply_markup=freekassa_amount_kb(int(fk_method), FREEKASSA_FEE_PERCENT)
+                if method == "freekassa" and fk_method
+                else freekassa_method_kb()
+                if method == "freekassa"
+                else topup_quick_kb(method, show_method_back=True),
             )
         finally:
             await db.close()
@@ -1063,22 +1188,32 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
             if not await get_bool_setting(db, "freekassa_enabled", False):
                 await _send_or_edit_main_message(message, db, "Оплата FreeKassa отключена.")
                 return
-            fk = await _start_freekassa_payment(db, user["id"], message.from_user.id, rub)
+            if not fk_method:
+                await _send_or_edit_main_message(
+                    message,
+                    db,
+                    "Выберите способ оплаты FreeKassa.",
+                    reply_markup=freekassa_method_kb(),
+                )
+                return
+            fk = await _start_freekassa_payment(db, user["id"], message.from_user.id, rub, int(fk_method))
             if fk.get("error"):
                 await _send_or_edit_main_message(
                     message,
                     db,
                     fk["error"],
-                    reply_markup=topup_quick_kb(method, show_method_back=True),
+                    reply_markup=freekassa_amount_kb(int(fk_method), FREEKASSA_FEE_PERCENT),
                 )
                 return
             pay_url = fk["pay_url"]
             payment_id = fk["payment_id"]
+            fee_total = _fk_fee_amount(rub)
             await state.clear()
             await _send_or_edit_main_message(
                 message,
                 db,
-                f"Оплата FreeKassa на {rub} ₽\n{pay_url}\n\nПлатёж обработается автоматически после оплаты.",
+                f"Оплата FreeKassa на {rub} ₽ (к оплате {fee_total} ₽)\n"
+                f"{pay_url}\n\nПлатёж обработается автоматически после оплаты.",
                 reply_markup=freekassa_pay_kb(payment_id, pay_url),
             )
             return
