@@ -371,6 +371,15 @@ def topup_quick_kb(method: str, show_method_back: bool = False) -> InlineKeyboar
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def freekassa_pay_kb(payment_id: int, pay_url: str) -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="✅ Оплатить", url=pay_url)],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data=f"fk:cancel:{payment_id}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:topup")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def proxies_select_kb(action: str, proxies: list[dict]) -> InlineKeyboardMarkup:
     buttons = []
     for p in proxies:

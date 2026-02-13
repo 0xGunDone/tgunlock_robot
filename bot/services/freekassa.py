@@ -128,13 +128,26 @@ def pick_rub_method(currencies: list[dict]) -> Optional[dict]:
             candidates.append(item)
     if not candidates:
         return None
-    # предпочитаем избранные методы
-    for item in candidates:
-        try:
-            if int(item.get("is_favorite", 0)) == 1:
+    # предпочитаем методы, отмеченные в кабинете
+    for key in ("is_favorite", "is_default", "is_default_method", "is_priority"):
+        for item in candidates:
+            raw = str(item.get(key, "")).strip().lower()
+            if raw in {"1", "true", "yes"}:
                 return item
-        except Exception:
-            continue
+    # приоритет популярных методов
+    preferred_ids = [44, 42, 36, 43, 4, 8, 12, 13, 6, 1]
+    for pid in preferred_ids:
+        for item in candidates:
+            try:
+                if int(item.get("id")) == pid:
+                    return item
+            except Exception:
+                continue
+    # избегаем FKWallet, если есть альтернатива
+    for item in candidates:
+        name = str(item.get("name") or item.get("title") or "")
+        if "fk" not in name.lower() or "wallet" not in name.lower():
+            return item
     return candidates[0]
 
 

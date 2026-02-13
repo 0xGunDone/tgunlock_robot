@@ -17,6 +17,7 @@ from bot.services.proxy_provider import MockProxyProvider, CommandProxyProvider,
 from bot.services.billing import run_billing_once
 from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user
 from bot.ui import send_bg_to_user
+from bot.keyboards import main_menu_inline_kb
 from bot.services.freekassa import verify_notification, amount_matches
 from fastapi.responses import PlainTextResponse
 
@@ -197,7 +198,14 @@ async def freekassa_webhook(request: Request) -> Response:
                 else f"{header}\n\nБаланс пополнен на {payment['amount']} ₽."
             )
             try:
-                await send_bg_to_user(bot, db, user, text)
+                is_admin = user["tg_id"] in (runtime.config.admin_tg_ids if runtime.config else [])
+                await send_bg_to_user(
+                    bot,
+                    db,
+                    user,
+                    text,
+                    reply_markup=main_menu_inline_kb(is_admin),
+                )
             except Exception:
                 pass
     finally:
