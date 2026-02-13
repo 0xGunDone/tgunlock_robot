@@ -213,6 +213,12 @@ async def freekassa_webhook(request: Request) -> Response:
     return PlainTextResponse("YES")
 
 
+@app.get(FREEKASSA_PATH)
+async def freekassa_webhook_status() -> Response:
+    # Для проверки доступности URL со стороны FreeKassa
+    return PlainTextResponse("OK")
+
+
 async def billing_loop() -> None:
     while True:
         db = await get_db(config.db_path)
