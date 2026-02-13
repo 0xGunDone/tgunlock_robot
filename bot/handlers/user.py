@@ -21,6 +21,7 @@ from bot.keyboards import (
     help_detail_kb,
 )
 from bot.runtime import runtime
+from bot.ui import send_or_edit_bg_message
 from bot.services.settings import (
     get_int_setting,
     get_decimal_setting,
@@ -79,27 +80,28 @@ async def _send_or_edit_main_message(
 ) -> None:
     user = await dao.get_user_by_tg_id_any(db, message.from_user.id)
     last_id = user["last_menu_message_id"] if user and user["last_menu_message_id"] else None
-    if last_id:
-        try:
-            await message.bot.edit_message_text(
-                text,
-                chat_id=message.chat.id,
-                message_id=last_id,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                disable_web_page_preview=True,
-            )
-            await dao.update_user_last_menu_message_id(db, message.from_user.id, last_id)
-            return
-        except Exception:
-            pass
-    msg = await message.answer(
+    msg_id = await send_or_edit_bg_message(
+        message.bot,
+        message.chat.id,
         text,
         reply_markup=reply_markup,
         parse_mode=parse_mode,
-        disable_web_page_preview=True,
+        message_id=last_id,
     )
-    await dao.update_user_last_menu_message_id(db, message.from_user.id, msg.message_id)
+    await dao.update_user_last_menu_message_id(db, message.from_user.id, msg_id)
+
+
+async def _send_bg_no_db(
+    message: Message, text: str, reply_markup=None, parse_mode: str | None = None
+) -> None:
+    await send_or_edit_bg_message(
+        message.bot,
+        message.chat.id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        message_id=None,
+    )
 
 
 async def _get_user_and_header(db, tg_id: int) -> tuple[object | None, str | None]:
@@ -112,24 +114,15 @@ async def _get_user_and_header(db, tg_id: int) -> tuple[object | None, str | Non
 
 
 async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
-    try:
-        msg = await call.message.edit_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            disable_web_page_preview=True,
-        )
-        await _remember_menu_message(call.from_user.id, msg.message_id)
-    except Exception as exc:
-        if "message is not modified" in str(exc).lower():
-            return
-        msg = await call.message.answer(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            disable_web_page_preview=True,
-        )
-        await _remember_menu_message(call.from_user.id, msg.message_id)
+    msg_id = await send_or_edit_bg_message(
+        call.message.bot,
+        call.message.chat.id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        message_id=call.message.message_id,
+    )
+    await _remember_menu_message(call.from_user.id, msg_id)
 
 
 async def _remember_menu_message(tg_id: int, message_id: int) -> None:
@@ -293,7 +286,7 @@ async def _issue_invoice(bot: Bot, chat_id: int, db, user_id: int, rub: int) -> 
 async def cmd_start(message: Message, state: FSMContext) -> None:
     config = runtime.config
     if config is None:
-        await message.answer("Бот не настроен.")
+        await _send_bg_no_db(message, "Бот не настроен.")
         return
     await state.clear()
 
@@ -307,7 +300,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
         if user:
             if user["blocked_at"]:
-                await message.answer("Ваш аккаунт заблокирован.")
+                await _send_or_edit_main_message(message, db, "Ваш аккаунт заблокирован.")
                 return
             await db.execute(
                 "UPDATE users SET username = ? WHERE tg_id = ?",
@@ -831,18 +824,26 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
     try:
         rub = int(message.text.strip())
     except Exception:
-        await message.answer("Введите целое число.")
+        db = await get_db(config.db_path)
+        try:
+            await _send_or_edit_main_message(message, db, "Введите целое число.", reply_markup=topup_quick_kb())
+        finally:
+            await db.close()
         return
 
     if rub <= 0:
-        await message.answer("Сумма должна быть больше 0.")
+        db = await get_db(config.db_path)
+        try:
+            await _send_or_edit_main_message(message, db, "Сумма должна быть больше 0.", reply_markup=topup_quick_kb())
+        finally:
+            await db.close()
         return
 
     db = await get_db(config.db_path)
     try:
         user = await dao.get_user_by_tg_id(db, message.from_user.id)
         if not user:
-            await message.answer("Нажмите /start")
+            await _send_or_edit_main_message(message, db, "Нажмите /start")
             return
         await _issue_invoice(message.bot, message.from_user.id, db, user["id"], rub)
         await state.clear()
@@ -894,13 +895,17 @@ async def successful_payment(message: Message) -> None:
         balance = user["balance"] if user else 0
         header = f"Баланс: {balance} ₽ | Активных прокси: {active}"
         if reenabled:
-            await message.answer(
+            await _send_or_edit_main_message(
+                message,
+                db,
                 f"{header}\n\nБаланс пополнен на {rub} ₽.\n"
                 "Прокси снова активны. Откройте «Мои прокси» для ссылок.",
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
             )
         else:
-            await message.answer(
+            await _send_or_edit_main_message(
+                message,
+                db,
                 f"{header}\n\nБаланс пополнен на {rub} ₽.",
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
             )

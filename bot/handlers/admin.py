@@ -30,6 +30,7 @@ from bot.keyboards import (
     admin_user_proxies_kb,
 )
 from bot.runtime import runtime
+from bot.ui import send_or_edit_bg_message
 from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user
 
 router = Router()
@@ -49,20 +50,36 @@ def _require_admin(message: Message) -> bool:
 
 
 async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
+    await send_or_edit_bg_message(
+        call.message.bot,
+        call.message.chat.id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        message_id=call.message.message_id,
+    )
+
+
+async def _admin_send_or_edit(message: Message, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
+    config = runtime.config
+    if config is None:
+        await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+    db = await get_db(config.db_path)
     try:
-        await call.message.edit_text(
+        user = await dao.get_user_by_tg_id_any(db, message.from_user.id)
+        last_id = user["last_menu_message_id"] if user and user["last_menu_message_id"] else None
+        msg_id = await send_or_edit_bg_message(
+            message.bot,
+            message.chat.id,
             text,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
-            disable_web_page_preview=True,
+            message_id=last_id,
         )
-    except Exception:
-        await call.message.answer(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            disable_web_page_preview=True,
-        )
+        await dao.update_user_last_menu_message_id(db, message.from_user.id, msg_id)
+    finally:
+        await db.close()
 
 
 def _settings_text(settings_map: dict[str, str]) -> str:
@@ -210,7 +227,7 @@ async def admin_start(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
         return
     await state.clear()
-    await message.answer("Админка", reply_markup=admin_menu_inline_kb())
+    await _admin_send_or_edit(message, "Админка", reply_markup=admin_menu_inline_kb())
 
 
 @router.callback_query(F.data == "menu:admin")
@@ -294,7 +311,7 @@ async def admin_users_search(call: CallbackQuery, state: FSMContext) -> None:
         return
     await call.answer()
     await state.set_state(AdminStates.waiting_user_query)
-    await call.message.answer("Введите tg_id или username пользователя.")
+    await _safe_edit(call, "Введите tg_id или username пользователя.")
 
 
 async def _render_users_list(db, users) -> list[dict]:
@@ -378,12 +395,13 @@ async def admin_user_query(message: Message, state: FSMContext) -> None:
             user = await dao.get_user_by_username(db, query)
 
         if not user:
-            await message.answer("Пользователь не найден.")
+            await _admin_send_or_edit(message, "Пользователь не найден.")
             await state.clear()
             return
 
         await state.update_data(admin_user_id=user["id"])
-        await message.answer(
+        await _admin_send_or_edit(
+            message,
             "Профиль:\n"
             f"ID: {user['id']}\n"
             f"tg_id: {user['tg_id']}\n"
@@ -392,7 +410,8 @@ async def admin_user_query(message: Message, state: FSMContext) -> None:
             f"Заблокирован: {'да' if user['blocked_at'] else 'нет'}\n"
             f"Дата регистрации: {user['created_at']}"
         )
-        await message.answer(
+        await _admin_send_or_edit(
+            message,
             "Действия через кнопки или текст:\n"
             "`+ сумма`, `- сумма`, `block`, `unblock`, `delete`",
             parse_mode=None,
@@ -423,7 +442,7 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
             try:
                 delta = int(text)
             except Exception:
-                await message.answer("Неверный формат суммы.")
+                await _admin_send_or_edit(message, "Неверный формат суммы.")
                 return
             await dao.add_user_balance(db, user_id, delta)
             if delta > 0:
@@ -439,26 +458,26 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
                             )
                     except Exception:
                         pass
-            await message.answer("Баланс обновлён.")
+            await _admin_send_or_edit(message, "Баланс обновлён.")
             return
 
         if text == "block":
             await dao.block_user(db, user_id)
-            await message.answer("Пользователь заблокирован.")
+            await _admin_send_or_edit(message, "Пользователь заблокирован.")
             return
 
         if text == "unblock":
             await dao.unblock_user(db, user_id)
-            await message.answer("Пользователь разблокирован.")
+            await _admin_send_or_edit(message, "Пользователь разблокирован.")
             return
 
         if text == "delete":
             await dao.delete_user(db, user_id)
             await sync_mtproto_secrets(db)
-            await message.answer("Пользователь удалён.")
+            await _admin_send_or_edit(message, "Пользователь удалён.")
             return
 
-        await message.answer("Неизвестная команда.")
+        await _admin_send_or_edit(message, "Неизвестная команда.")
     finally:
         await db.close()
 
@@ -513,7 +532,7 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
         elif action == "custom":
             await state.set_state(AdminStates.waiting_balance_delta)
             await state.update_data(balance_user_id=user_id)
-            await call.message.answer("Введите сумму (можно со знаком -):")
+            await _safe_edit(call, "Введите сумму (можно со знаком -):")
             return
         elif action == "reset":
             await dao.set_user_balance(db, user_id, 0)
@@ -612,7 +631,7 @@ async def admin_user_custom_delta(message: Message, state: FSMContext) -> None:
     try:
         delta = int(message.text.strip())
     except Exception:
-        await message.answer("Введите целое число (можно со знаком -).")
+        await _admin_send_or_edit(message, "Введите целое число (можно со знаком -).")
         return
 
     config = runtime.config
@@ -637,7 +656,11 @@ async def admin_user_custom_delta(message: Message, state: FSMContext) -> None:
         user = await dao.get_user_by_id(db, user_id)
         if user:
             text = await _admin_user_profile(db, user_id)
-            await message.answer(text, reply_markup=admin_user_actions_kb(user_id, bool(user["blocked_at"])))
+            await _admin_send_or_edit(
+                message,
+                text,
+                reply_markup=admin_user_actions_kb(user_id, bool(user["blocked_at"])),
+            )
         await state.clear()
     finally:
         await db.close()
@@ -680,7 +703,7 @@ async def admin_proxies_by_user(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
         return
     if not message.text.strip().isdigit():
-        await message.answer("Введите числовой tg_id.")
+        await _admin_send_or_edit(message, "Введите числовой tg_id.")
         return
 
     tg_id = int(message.text.strip())
@@ -691,16 +714,16 @@ async def admin_proxies_by_user(message: Message, state: FSMContext) -> None:
     try:
         user = await dao.get_user_by_tg_id(db, tg_id)
         if not user:
-            await message.answer("Пользователь не найден.")
+            await _admin_send_or_edit(message, "Пользователь не найден.")
             return
         proxies = await dao.list_proxies_by_user(db, user["id"])
         if not proxies:
-            await message.answer("У пользователя нет прокси.")
+            await _admin_send_or_edit(message, "У пользователя нет прокси.")
             return
         lines = []
         for p in proxies:
             lines.append(f"{p['login']} {p['ip']}:{p['port']} статус={p['status']}")
-        await message.answer("Прокси пользователя:\n" + "\n".join(lines))
+        await _admin_send_or_edit(message, "Прокси пользователя:\n" + "\n".join(lines))
         await state.clear()
     finally:
         await db.close()
@@ -755,7 +778,7 @@ async def admin_settings(call: CallbackQuery, state: FSMContext) -> None:
             _settings_text(settings_map),
             reply_markup=admin_settings_kb(settings_map),
         )
-        await call.message.answer("Чтобы изменить значение, нажмите кнопку.")
+        await _safe_edit(call, "Чтобы изменить значение, нажмите кнопку.")
         await state.set_state(AdminStates.waiting_setting_input)
     finally:
         await db.close()
@@ -818,7 +841,7 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     selected_key = data.get("setting_key")
     if not selected_key:
-        await message.answer("Нажмите кнопку нужной настройки.")
+        await _admin_send_or_edit(message, "Нажмите кнопку нужной настройки.")
         return
     key = selected_key
     value = message.text.strip()
@@ -832,8 +855,12 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
         if key == "mtproto_enabled":
             await sync_mtproto_secrets(db)
         settings_map = await dao.get_settings_map(db)
-        await message.answer("Настройка обновлена.")
-        await message.answer(_settings_text(settings_map), reply_markup=admin_settings_kb(settings_map))
+        await _admin_send_or_edit(message, "Настройка обновлена.")
+        await _admin_send_or_edit(
+            message,
+            _settings_text(settings_map),
+            reply_markup=admin_settings_kb(settings_map),
+        )
         await state.update_data(setting_key=None)
     finally:
         await db.close()
@@ -846,7 +873,7 @@ async def admin_settings_pick(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     key = call.data.split(":", 1)[1]
     await state.update_data(setting_key=key)
-    await call.message.answer(f"Введите значение для `{key}`:", parse_mode=None)
+    await _safe_edit(call, f"Введите значение для `{key}`:", parse_mode=None)
 
 
 @router.callback_query(F.data.startswith("admin_settings_toggle:"))
@@ -985,7 +1012,7 @@ async def admin_broadcast_start(call: CallbackQuery, state: FSMContext) -> None:
         return
     await call.answer()
     await state.set_state(AdminStates.waiting_broadcast_text)
-    await call.message.answer("Введите текст рассылки.")
+    await _safe_edit(call, "Введите текст рассылки.")
 
 
 @router.message(AdminStates.waiting_broadcast_text)
@@ -993,7 +1020,7 @@ async def admin_broadcast_text(message: Message, state: FSMContext) -> None:
     if not _require_admin(message):
         return
     await state.update_data(broadcast_text=message.text)
-    await message.answer("Выберите аудиторию:", reply_markup=broadcast_filters_kb())
+    await _admin_send_or_edit(message, "Выберите аудиторию:", reply_markup=broadcast_filters_kb())
 
 
 @router.callback_query(F.data.startswith("broadcast:"))
@@ -1005,13 +1032,13 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
     action = call.data.split(":", 1)[1]
     if action == "cancel":
         await state.clear()
-        await call.message.answer("Рассылка отменена.")
+        await _safe_edit(call, "Рассылка отменена.")
         return
 
     data = await state.get_data()
     text = data.get("broadcast_text")
     if not text:
-        await call.message.answer("Текст рассылки не задан.")
+        await _safe_edit(call, "Текст рассылки не задан.")
         return
 
     config = runtime.config
@@ -1040,7 +1067,7 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
         rows = await cur.fetchall()
         tg_ids = [row["tg_id"] for row in rows]
 
-        await call.message.answer(f"Начинаю рассылку. Получателей: {len(tg_ids)}")
+        await _safe_edit(call, f"Начинаю рассылку. Получателей: {len(tg_ids)}")
         delay = config.broadcast_delay_ms / 1000.0
 
         sent = 0
@@ -1055,9 +1082,7 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
             if delay:
                 await asyncio.sleep(delay)
 
-        await call.message.answer(
-            f"Рассылка завершена. Успешно: {sent}, ошибок: {failed}."
-        )
+        await _safe_edit(call, f"Рассылка завершена. Успешно: {sent}, ошибок: {failed}.")
         await state.clear()
     finally:
         await db.close()
@@ -1172,7 +1197,7 @@ async def admin_ref_create(call: CallbackQuery, state: FSMContext) -> None:
         return
     await call.answer()
     await state.set_state(AdminStates.ref_code)
-    await call.message.answer("Шаг 1/2. Введите код ссылки (латиница/цифры без пробелов).")
+    await _safe_edit(call, "Шаг 1/2. Введите код ссылки (латиница/цифры без пробелов).")
 
 
 @router.message(AdminStates.ref_code)
@@ -1181,7 +1206,7 @@ async def admin_ref_code(message: Message, state: FSMContext) -> None:
         return
     code = message.text.strip()
     if not re.match(r"^[A-Za-z0-9]+$", code):
-        await message.answer("Код должен состоять из латиницы и цифр, без пробелов.")
+        await _admin_send_or_edit(message, "Код должен состоять из латиницы и цифр, без пробелов.")
         return
     config = runtime.config
     if config is None:
@@ -1189,13 +1214,14 @@ async def admin_ref_code(message: Message, state: FSMContext) -> None:
     db = await get_db(config.db_path)
     try:
         if await dao.get_user_by_ref_code(db, code) or await dao.get_referral_link(db, code):
-            await message.answer("Код уже используется. Введите другой.")
+            await _admin_send_or_edit(message, "Код уже используется. Введите другой.")
             return
     finally:
         await db.close()
     await state.update_data(ref_code=code)
     await state.set_state(AdminStates.ref_bonuses)
-    await message.answer(
+    await _admin_send_or_edit(
+        message,
         "Шаг 2/2. Введите бонус приглашенному (руб).\n"
         "Можно вторым числом указать бонус приглашающему.\n"
         "Примеры: `100` или `100 50`.",
@@ -1210,22 +1236,22 @@ async def admin_ref_bonuses(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     code = data.get("ref_code")
     if not code:
-        await message.answer("Не удалось создать ссылку. Начните заново.")
+        await _admin_send_or_edit(message, "Не удалось создать ссылку. Начните заново.")
         await state.clear()
         return
 
     parts = message.text.strip().split()
     if not parts:
-        await message.answer("Введите одно или два числа.")
+        await _admin_send_or_edit(message, "Введите одно или два числа.")
         return
     try:
         bonus_invited = int(parts[0])
         bonus_inviter = int(parts[1]) if len(parts) > 1 else 0
     except Exception:
-        await message.answer("Введите одно или два числа.")
+        await _admin_send_or_edit(message, "Введите одно или два числа.")
         return
     if bonus_invited < 0 or bonus_inviter < 0:
-        await message.answer("Бонусы не могут быть отрицательными.")
+        await _admin_send_or_edit(message, "Бонусы не могут быть отрицательными.")
         return
 
     config = runtime.config
@@ -1235,7 +1261,7 @@ async def admin_ref_bonuses(message: Message, state: FSMContext) -> None:
     try:
         owner = await dao.get_user_by_tg_id(db, message.from_user.id)
         if not owner:
-            await message.answer("Сначала откройте бота и нажмите /start.")
+            await _admin_send_or_edit(message, "Сначала откройте бота и нажмите /start.")
             await state.clear()
             return
         owner_user_id = owner["id"]
@@ -1251,8 +1277,8 @@ async def admin_ref_bonuses(message: Message, state: FSMContext) -> None:
         )
         bot_info = await message.bot.get_me()
         link = f"https://t.me/{bot_info.username}?start={code}"
-        await message.answer("Ссылка создана.")
-        await message.answer(f"Ссылка для распространения:\n{link}")
+        await _admin_send_or_edit(message, "Ссылка создана.")
+        await _admin_send_or_edit(message, f"Ссылка для распространения:\n{link}")
         await state.clear()
     finally:
         await db.close()
