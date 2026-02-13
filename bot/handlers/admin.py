@@ -24,6 +24,7 @@ from bot.keyboards import (
     admin_referrals_list_kb,
     admin_ref_delete_confirm_kb,
     mtproxy_status_kb,
+    freekassa_status_kb,
     admin_users_kb,
     admin_users_list_kb,
     admin_export_kb,
@@ -32,6 +33,7 @@ from bot.keyboards import (
 from bot.runtime import runtime
 from bot.ui import send_or_edit_bg_message
 from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user
+from bot.services.freekassa import get_currencies
 
 router = Router()
 
@@ -107,6 +109,59 @@ def _settings_text(settings_map: dict[str, str]) -> str:
         f"MTProto host: {val('mtproto_host', '') or '—'}",
         f"MTProto port: {val('mtproto_port', '9443')}",
     ]
+    return "\n".join(lines)
+
+
+def _pick_val(item: dict, *keys: str, default: str = "—") -> str:
+    for key in keys:
+        if key in item and item[key] not in (None, ""):
+            return str(item[key])
+    return default
+
+
+async def _freekassa_status_text(db) -> str:
+    config = runtime.config
+    if config is None:
+        return "FreeKassa: конфиг не загружен."
+    settings_map = await dao.get_settings_map(db)
+    enabled = settings_map.get("freekassa_enabled", "0")
+    lines = [
+        "FreeKassa:",
+        f"Включено: {'да' if enabled == '1' else 'нет'}",
+        f"Shop ID: {config.freekassa_shop_id or '—'}",
+        f"API base: {config.freekassa_api_base or '—'}",
+    ]
+    if not config.freekassa_shop_id or not config.freekassa_api_key:
+        lines.append("API ключ или Shop ID не заданы.")
+        return "\n".join(lines)
+
+    data = await get_currencies(
+        api_base=config.freekassa_api_base,
+        api_key=config.freekassa_api_key,
+        shop_id=config.freekassa_shop_id,
+    )
+    if data.get("error"):
+        lines.append(f"Ошибка /currencies: {data['error']}")
+        return "\n".join(lines)
+
+    items = data.get("currencies") or data.get("data") or []
+    if not items:
+        lines.append("Список методов пуст.")
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append("Методы (id | currency | enabled | name | fields):")
+    max_items = 20
+    for item in items[:max_items]:
+        item_id = _pick_val(item, "id", "currency_id", "method_id")
+        currency = _pick_val(item, "currency", "cur")
+        enabled = _pick_val(item, "is_enabled", "enabled")
+        name = _pick_val(item, "name", "title", "method")
+        fields = item.get("fields") or []
+        fields_count = len(fields) if isinstance(fields, list) else (1 if fields else 0)
+        lines.append(f"{item_id} | {currency} | {enabled} | {name} | fields={fields_count}")
+    if len(items) > max_items:
+        lines.append(f"... ещё {len(items) - max_items}")
     return "\n".join(lines)
 
 
@@ -798,6 +853,39 @@ async def admin_mtproxy(call: CallbackQuery, state: FSMContext) -> None:
     try:
         text = await _mtproxy_status_text(db)
         await _safe_edit(call, text, reply_markup=mtproxy_status_kb())
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data == "admin:freekassa")
+async def admin_freekassa(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    await state.clear()
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        text = await _freekassa_status_text(db)
+        await _safe_edit(call, text, reply_markup=freekassa_status_kb())
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data == "admin:freekassa_refresh")
+async def admin_freekassa_refresh(call: CallbackQuery) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        text = await _freekassa_status_text(db)
+        await _safe_edit(call, text, reply_markup=freekassa_status_kb())
     finally:
         await db.close()
 

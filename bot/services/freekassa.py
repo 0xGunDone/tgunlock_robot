@@ -116,14 +116,14 @@ def pick_rub_method(currencies: list[dict]) -> Optional[dict]:
         return None
     candidates = []
     for item in currencies:
-        try:
-            enabled = int(item.get("is_enabled", 0)) == 1
-        except Exception:
+        raw_enabled = str(item.get("is_enabled", "")).strip().lower()
+        if raw_enabled in {"1", "true", "yes"}:
+            enabled = True
+        elif raw_enabled in {"0", "false", "no", ""}:
             enabled = False
+        else:
+            enabled = bool(raw_enabled)
         currency = str(item.get("currency") or "")
-        fields = item.get("fields")
-        if fields:
-            continue
         if enabled and currency.upper() == "RUB":
             candidates.append(item)
     if not candidates:

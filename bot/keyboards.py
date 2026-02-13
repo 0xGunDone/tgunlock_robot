@@ -39,6 +39,7 @@ def admin_menu_inline_kb() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="📡 MTProxy", callback_data="admin:mtproxy"),
+            InlineKeyboardButton(text="💳 FreeKassa", callback_data="admin:freekassa"),
         ],
         [
             InlineKeyboardButton(text="📦 Экспорт", callback_data="admin:export"),
@@ -208,6 +209,15 @@ def mtproxy_status_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:mtproxy_refresh")],
             [InlineKeyboardButton(text="📄 Логи", callback_data="admin:mtproxy_logs")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")],
+        ]
+    )
+
+
+def freekassa_status_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:freekassa_refresh")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")],
         ]
     )
