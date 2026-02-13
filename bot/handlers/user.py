@@ -30,7 +30,7 @@ from bot.services.settings import (
     convert_rub_to_stars,
 )
 from bot.services.mtproto import sync_mtproto_secrets, ensure_proxy_mtproto_secret, reenable_proxies_for_user
-from bot.services.freekassa import create_order
+from bot.services.freekassa import create_order, get_currencies, pick_rub_method
 from bot.utils import (
     generate_login,
     generate_password,
@@ -293,9 +293,26 @@ async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int) -> st
         return "FreeKassa не настроена."
     if not config.freekassa_shop_id or not config.freekassa_api_key:
         return "FreeKassa не настроена у администратора."
-    method = config.freekassa_method or 44
-    if method not in {36, 43, 44}:
-        method = 44
+    currency = "RUB"
+    method = None
+    currencies = await get_currencies(
+        api_base=config.freekassa_api_base,
+        api_key=config.freekassa_api_key,
+        shop_id=config.freekassa_shop_id,
+    )
+    if currencies.get("error"):
+        return f"Ошибка FreeKassa: {currencies['error']}"
+    items = currencies.get("currencies") or currencies.get("data") or []
+    picked = pick_rub_method(items)
+    if not picked:
+        return "Ошибка FreeKassa: нет доступных способов оплаты в RUB."
+    try:
+        method = int(picked.get("id"))
+    except Exception:
+        method = None
+    currency = str(picked.get("currency") or "RUB")
+    if not method:
+        return "Ошибка FreeKassa: не удалось определить способ оплаты."
     email = f"{tg_id}@telegram.org"
     ip = config.freekassa_ip or config.proxy_default_ip or "127.0.0.1"
     payment_id = await dao.create_payment(
@@ -314,6 +331,7 @@ async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int) -> st
         email=email,
         ip=ip,
         payment_id=payment_id,
+        currency=currency,
     )
     if result.get("error"):
         return f"Ошибка FreeKassa: {result['error']}"

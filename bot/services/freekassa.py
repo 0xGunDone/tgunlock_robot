@@ -85,6 +85,59 @@ async def create_order(
             }
 
 
+async def get_currencies(api_base: str, api_key: str, shop_id: str) -> Dict[str, Any]:
+    payload = {
+        "shopId": int(shop_id),
+        "nonce": int(time.time() * 1000),
+    }
+    payload["signature"] = generate_api_signature(payload, api_key)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-API-KEY": api_key,
+    }
+
+    api_url = f"{api_base.rstrip('/')}/currencies"
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+        async with session.post(api_url, json=payload, headers=headers) as resp:
+            data = {}
+            try:
+                data = await resp.json(encoding="utf-8")
+            except Exception:
+                data = {"error": await resp.text()}
+            if resp.status != 200:
+                return {"error": data.get("message") or data.get("error") or "FreeKassa error"}
+            return data
+
+
+def pick_rub_method(currencies: list[dict]) -> Optional[dict]:
+    if not currencies:
+        return None
+    candidates = []
+    for item in currencies:
+        try:
+            enabled = int(item.get("is_enabled", 0)) == 1
+        except Exception:
+            enabled = False
+        currency = str(item.get("currency") or "")
+        fields = item.get("fields")
+        if fields:
+            continue
+        if enabled and currency.upper() == "RUB":
+            candidates.append(item)
+    if not candidates:
+        return None
+    # предпочитаем избранные методы
+    for item in candidates:
+        try:
+            if int(item.get("is_favorite", 0)) == 1:
+                return item
+        except Exception:
+            continue
+    return candidates[0]
+
+
 def verify_notification(data: dict[str, str], shop_id: str, secret_word_2: str) -> bool:
     merchant_id = data.get("MERCHANT_ID") or data.get("merchant_id") or ""
     amount = data.get("AMOUNT") or data.get("amount") or ""
