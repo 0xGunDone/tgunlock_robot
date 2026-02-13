@@ -11,7 +11,6 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "stars_rate": "1",
     "stars_enabled": "1",
     "freekassa_enabled": "0",
-    "freekassa_method": "44",
     "stars_buy_url": "",
     "stars_buy_hint_enabled": "0",
     "mtproto_enabled": "1",

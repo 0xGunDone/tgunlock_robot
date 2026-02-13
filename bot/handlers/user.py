@@ -293,7 +293,7 @@ async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int) -> st
         return "FreeKassa не настроена."
     if not config.freekassa_shop_id or not config.freekassa_api_key:
         return "FreeKassa не настроена у администратора."
-    method = await get_int_setting(db, "freekassa_method", 44)
+    method = config.freekassa_method or 44
     if method not in {36, 43, 44}:
         method = 44
     email = f"{tg_id}@telegram.org"

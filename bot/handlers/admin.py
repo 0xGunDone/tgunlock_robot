@@ -98,7 +98,6 @@ def _settings_text(settings_map: dict[str, str]) -> str:
         f"Курс Stars: {val('stars_rate', '1')} ₽/⭐",
         f"Stars: {onoff('stars_enabled', '1')}",
         f"FreeKassa: {onoff('freekassa_enabled', '0')}",
-        f"FK метод: {val('freekassa_method', '44')}",
         f"Подсказка Stars: {onoff('stars_buy_hint_enabled', '0')}",
         f"URL Stars: {val('stars_buy_url', '') or '—'}",
         f"Рефералка: {onoff('referral_enabled', '1')}",

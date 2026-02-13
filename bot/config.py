@@ -34,6 +34,7 @@ class Config:
     freekassa_secret2: str
     freekassa_api_base: str
     freekassa_ip: str
+    freekassa_method: int
 
 
 def _parse_int_list(value: str) -> List[int]:
@@ -82,4 +83,5 @@ def load_config() -> Config:
         freekassa_secret2=os.getenv("FREEKASSA_SECRET_WORD_2", "").strip(),
         freekassa_api_base=os.getenv("FREEKASSA_API_BASE", "https://api.fk.life/v1").strip(),
         freekassa_ip=os.getenv("FREEKASSA_IP", "").strip(),
+        freekassa_method=int(os.getenv("FREEKASSA_METHOD", "44")),
     )

@@ -163,10 +163,6 @@ def admin_settings_kb(settings: dict[str, str]) -> InlineKeyboardMarkup:
                 text=f"Подсказка Stars: {_bool_label(val('stars_buy_hint_enabled', '0'))}",
                 callback_data="admin_settings_toggle:stars_buy_hint_enabled",
             ),
-            InlineKeyboardButton(
-                text=f"FK метод: {val('freekassa_method', '44')}",
-                callback_data="admin_settings_edit:freekassa_method",
-            ),
         ],
         [
             InlineKeyboardButton(
