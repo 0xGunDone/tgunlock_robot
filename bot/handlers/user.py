@@ -33,7 +33,7 @@ from bot.services.settings import (
     convert_rub_to_stars,
 )
 from bot.services.mtproto import sync_mtproto_secrets, ensure_proxy_mtproto_secret, reenable_proxies_for_user
-from bot.services.freekassa import create_order
+from bot.services.freekassa import create_order, resolve_method_id
 
 FREEKASSA_FEE_PERCENT = 12.5
 FREEKASSA_METHOD_OPTIONS = [
@@ -929,7 +929,30 @@ async def freekassa_pay(call: CallbackQuery, state: FSMContext) -> None:
             return
 
         rub_value = int(rub)
-        fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, rub_value, method_value)
+        config = runtime.config
+        if config is None:
+            return
+        preferred = {
+            44: [44, 42],  # SBP QR
+            36: [36, 4, 8, 12],  # cards
+            43: [43],  # SberPay
+        }.get(method_value, [method_value])
+        resolved = await resolve_method_id(
+            api_base=config.freekassa_api_base,
+            api_key=config.freekassa_api_key,
+            shop_id=config.freekassa_shop_id,
+            preferred_ids=preferred,
+            currency="RUB",
+        )
+        if not resolved:
+            await _safe_edit(
+                call,
+                "Этот способ оплаты сейчас недоступен. Выберите другой.",
+                reply_markup=freekassa_method_kb(rub_value, FREEKASSA_FEE_PERCENT),
+            )
+            return
+
+        fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, rub_value, int(resolved))
         if fk.get("error"):
             await _safe_edit(
                 call,

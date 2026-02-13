@@ -114,6 +114,69 @@ async def get_currencies(api_base: str, api_key: str, shop_id: str) -> Dict[str,
             return data
 
 
+def _pick_val(item: dict, *keys: str) -> str | None:
+    for key in keys:
+        value = item.get(key)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _is_enabled(item: dict) -> bool:
+    raw = _pick_val(item, "is_enabled", "enabled")
+    if raw is None:
+        return False
+    val = raw.strip().lower()
+    if val in {"1", "true", "yes"}:
+        return True
+    if val in {"0", "false", "no", ""}:
+        return False
+    return bool(val)
+
+
+def _item_id(item: dict) -> int | None:
+    raw = _pick_val(item, "id", "currency_id", "method_id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except Exception:
+        return None
+
+
+def _item_currency(item: dict) -> str:
+    return (_pick_val(item, "currency", "cur") or "").upper()
+
+
+async def resolve_method_id(
+    api_base: str,
+    api_key: str,
+    shop_id: str,
+    preferred_ids: list[int],
+    currency: str = "RUB",
+) -> int | None:
+    data = await get_currencies(api_base=api_base, api_key=api_key, shop_id=shop_id)
+    if data.get("error"):
+        return None
+    items = data.get("currencies") or data.get("data") or []
+    if not items:
+        return None
+    available = {}
+    for item in items:
+        if not _is_enabled(item):
+            continue
+        if currency and _item_currency(item) != currency.upper():
+            continue
+        item_id = _item_id(item)
+        if item_id is None:
+            continue
+        available[item_id] = item
+    for pid in preferred_ids:
+        if pid in available:
+            return pid
+    return None
+
+
 def pick_rub_method(currencies: list[dict]) -> Optional[dict]:
     if not currencies:
         return None
