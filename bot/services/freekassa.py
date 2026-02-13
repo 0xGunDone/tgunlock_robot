@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import hashlib
 import time
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Dict, Any
 
@@ -74,9 +75,11 @@ async def create_order(
             if resp.status != 200:
                 return {"error": data.get("message") or data.get("error") or "FreeKassa error"}
 
-            link = resp.headers.get("Location") or data.get("location")
+            link = data.get("location") or data.get("Location") or resp.headers.get("Location")
             if not link:
                 return {"error": "Не получена ссылка на оплату"}
+
+            link = _sanitize_url(link)
 
             return {
                 "payment_link": link,
@@ -168,3 +171,17 @@ def amount_matches(expected_rub: int, amount_str: str) -> bool:
         return got.quantize(Decimal("0.01")) == want.quantize(Decimal("0.01"))
     except (InvalidOperation, ValueError):
         return False
+
+
+def _sanitize_url(url: str) -> str:
+    if not url:
+        return url
+    if " " not in url:
+        return url
+    try:
+        parts = urlsplit(url)
+        query_items = parse_qsl(parts.query, keep_blank_values=True)
+        query = urlencode(query_items, doseq=True)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    except Exception:
+        return url
