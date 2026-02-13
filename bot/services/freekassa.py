@@ -128,12 +128,6 @@ def pick_rub_method(currencies: list[dict]) -> Optional[dict]:
             candidates.append(item)
     if not candidates:
         return None
-    # предпочитаем методы, отмеченные в кабинете
-    for key in ("is_favorite", "is_default", "is_default_method", "is_priority"):
-        for item in candidates:
-            raw = str(item.get(key, "")).strip().lower()
-            if raw in {"1", "true", "yes"}:
-                return item
     # приоритет популярных методов
     preferred_ids = [44, 42, 36, 43, 4, 8, 12, 13, 6, 1]
     for pid in preferred_ids:
