@@ -778,10 +778,9 @@ async def admin_settings(call: CallbackQuery, state: FSMContext) -> None:
         settings_map = await dao.get_settings_map(db)
         await _safe_edit(
             call,
-            _settings_text(settings_map),
+            _settings_text(settings_map) + "\n\nЧтобы изменить значение, нажмите кнопку.",
             reply_markup=admin_settings_kb(settings_map),
         )
-        await _safe_edit(call, "Чтобы изменить значение, нажмите кнопку.")
         await state.set_state(AdminStates.waiting_setting_input)
     finally:
         await db.close()
