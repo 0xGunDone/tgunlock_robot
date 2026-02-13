@@ -144,14 +144,28 @@ def admin_settings_kb(settings: dict[str, str]) -> InlineKeyboardMarkup:
                 callback_data="admin_settings_edit:stars_rate",
             ),
             InlineKeyboardButton(
+                text=f"Stars: {_bool_label(val('stars_enabled', '1'))}",
+                callback_data="admin_settings_toggle:stars_enabled",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 text="URL покупки Stars",
                 callback_data="admin_settings_edit:stars_buy_url",
+            ),
+            InlineKeyboardButton(
+                text=f"FreeKassa: {_bool_label(val('freekassa_enabled', '0'))}",
+                callback_data="admin_settings_toggle:freekassa_enabled",
             ),
         ],
         [
             InlineKeyboardButton(
                 text=f"Подсказка Stars: {_bool_label(val('stars_buy_hint_enabled', '0'))}",
                 callback_data="admin_settings_toggle:stars_buy_hint_enabled",
+            ),
+            InlineKeyboardButton(
+                text=f"FK метод: {val('freekassa_method', '44')}",
+                callback_data="admin_settings_edit:freekassa_method",
             ),
         ],
         [
@@ -320,22 +334,34 @@ def proxy_delete_confirm_kb(proxy_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def topup_quick_kb() -> InlineKeyboardMarkup:
+def topup_method_kb(stars_enabled: bool, freekassa_enabled: bool) -> InlineKeyboardMarkup:
+    buttons = []
+    if stars_enabled:
+        buttons.append([InlineKeyboardButton(text="⭐ Stars", callback_data="topup:method:stars")])
+    if freekassa_enabled:
+        buttons.append([InlineKeyboardButton(text="💳 FreeKassa", callback_data="topup:method:freekassa")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def topup_quick_kb(method: str, show_method_back: bool = False) -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text="📅 На 7 дней", callback_data="topup:days:7")],
+        [InlineKeyboardButton(text="📅 На 7 дней", callback_data=f"topup:days:{method}:7")],
         [
-            InlineKeyboardButton(text="100 ₽", callback_data="topup:amount:100"),
-            InlineKeyboardButton(text="300 ₽", callback_data="topup:amount:300"),
-            InlineKeyboardButton(text="500 ₽", callback_data="topup:amount:500"),
+            InlineKeyboardButton(text="100 ₽", callback_data=f"topup:amount:{method}:100"),
+            InlineKeyboardButton(text="300 ₽", callback_data=f"topup:amount:{method}:300"),
+            InlineKeyboardButton(text="500 ₽", callback_data=f"topup:amount:{method}:500"),
         ],
         [
-            InlineKeyboardButton(text="1000 ₽", callback_data="topup:amount:1000"),
-            InlineKeyboardButton(text="2000 ₽", callback_data="topup:amount:2000"),
-            InlineKeyboardButton(text="5000 ₽", callback_data="topup:amount:5000"),
+            InlineKeyboardButton(text="1000 ₽", callback_data=f"topup:amount:{method}:1000"),
+            InlineKeyboardButton(text="2000 ₽", callback_data=f"topup:amount:{method}:2000"),
+            InlineKeyboardButton(text="5000 ₽", callback_data=f"topup:amount:{method}:5000"),
         ],
-        [InlineKeyboardButton(text="✍️ Ввести сумму", callback_data="topup:custom")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+        [InlineKeyboardButton(text="✍️ Ввести сумму", callback_data=f"topup:custom:{method}")],
     ]
+    if show_method_back:
+        buttons.append([InlineKeyboardButton(text="⬅️ К способам оплаты", callback_data="menu:topup")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

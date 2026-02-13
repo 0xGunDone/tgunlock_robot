@@ -17,6 +17,11 @@ pip install -r requirements.txt
 - `DB_PATH` (по умолчанию `data/bot.db`)
 - `APP_PREFIX` (если проксируете под путём, например `/tgunlock_robot`)
 - `PROXY_DEFAULT_IP` (публичный домен/IP; используется как fallback для MTProto host)
+- `FREEKASSA_SHOP_ID` (если используете FreeKassa API)
+- `FREEKASSA_API_KEY`
+- `FREEKASSA_SECRET_WORD_2` (секретное слово №2, для webhook)
+- `FREEKASSA_API_BASE` (по умолчанию `https://api.fk.life/v1`)
+- `FREEKASSA_IP` (IP клиента; можно указать IP сервера)
 
 3. Запустите сервер:
 
@@ -25,6 +30,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Webhook будет установлен автоматически на `WEBHOOK_URL`.
+
+Если используете FreeKassa API, укажите URL оповещений:
+`https://<ваш-домен>/<APP_PREFIX>/freekassa` (или `/freekassa`, если `APP_PREFIX` пустой).
 
 ## Настройки (БД settings)
 
@@ -39,11 +47,14 @@ Webhook будет установлен автоматически на `WEBHOOK
 6. `ref_bonus_inviter = 10` — бонус пригласившему.
 7. `referral_enabled = 1` — включение рефералки (0 = выкл).
 8. `stars_rate = 1` — курс Stars к рублю (1 Star = 1 ₽).
-9. `stars_buy_url = ""` — ссылка где купить Stars (если нужна подсказка).
-10. `stars_buy_hint_enabled = 0` — показывать подсказку где купить Stars (0/1).
-11. `mtproto_enabled = 1` — показывать MTProto ссылку (0/1).
-12. `mtproto_host = ""` — хост MTProto (если пусто, используется `PROXY_DEFAULT_IP`).
-13. `mtproto_port = 9443` — порт MTProto.
+9. `stars_enabled = 1` — включить оплату Stars (0/1).
+10. `freekassa_enabled = 0` — включить оплату FreeKassa (0/1).
+11. `freekassa_method = 44` — метод FreeKassa (`44` СБП QR, `36` карты РФ, `43` SberPay).
+12. `stars_buy_url = ""` — ссылка где купить Stars (если нужна подсказка).
+13. `stars_buy_hint_enabled = 0` — показывать подсказку где купить Stars (0/1).
+14. `mtproto_enabled = 1` — показывать MTProto ссылку (0/1).
+15. `mtproto_host = ""` — хост MTProto (если пусто, используется `PROXY_DEFAULT_IP`).
+16. `mtproto_port = 9443` — порт MTProto.
 
 `mtproto_secret` больше не настраивается вручную — секрет создаётся автоматически для каждого прокси.
 

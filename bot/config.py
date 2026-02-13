@@ -29,6 +29,11 @@ class Config:
     billing_interval_sec: int
     mtproxy_secrets_file: str
     mtproxy_service: str | None
+    freekassa_shop_id: str
+    freekassa_api_key: str
+    freekassa_secret2: str
+    freekassa_api_base: str
+    freekassa_ip: str
 
 
 def _parse_int_list(value: str) -> List[int]:
@@ -72,4 +77,9 @@ def load_config() -> Config:
         billing_interval_sec=int(os.getenv("BILLING_INTERVAL_SEC", "3600")),
         mtproxy_secrets_file=os.getenv("MTPROXY_SECRETS_FILE", "data/mtproxy_secrets.txt"),
         mtproxy_service=os.getenv("MTPROXY_SERVICE", "mtproxy.service").strip() or None,
+        freekassa_shop_id=os.getenv("FREEKASSA_SHOP_ID", "").strip(),
+        freekassa_api_key=os.getenv("FREEKASSA_API_KEY", "").strip(),
+        freekassa_secret2=os.getenv("FREEKASSA_SECRET_WORD_2", "").strip(),
+        freekassa_api_base=os.getenv("FREEKASSA_API_BASE", "https://api.fk.life/v1").strip(),
+        freekassa_ip=os.getenv("FREEKASSA_IP", "").strip(),
     )

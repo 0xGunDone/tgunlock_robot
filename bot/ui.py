@@ -4,6 +4,7 @@ from pathlib import Path
 
 from aiogram import Bot
 from aiogram.types import FSInputFile, InlineKeyboardMarkup
+from bot import dao
 
 _BG_PATH = Path(__file__).resolve().parents[1] / "bg.jpg"
 _CAPTION_LIMIT = 1000
@@ -84,3 +85,28 @@ async def send_or_edit_bg_message(
         disable_web_page_preview=True,
     )
     return msg.message_id
+
+
+async def send_bg_to_user(
+    bot: Bot,
+    db,
+    user_row,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
+) -> None:
+    if not user_row:
+        return
+    try:
+        last_id = user_row["last_menu_message_id"]
+    except Exception:
+        last_id = None
+    msg_id = await send_or_edit_bg_message(
+        bot,
+        user_row["tg_id"],
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        message_id=last_id,
+    )
+    await dao.update_user_last_menu_message_id(db, user_row["tg_id"], msg_id)

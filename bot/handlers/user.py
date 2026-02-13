@@ -17,6 +17,7 @@ from bot.keyboards import (
     proxies_empty_kb,
     proxy_delete_confirm_kb,
     topup_quick_kb,
+    topup_method_kb,
     help_kb,
     help_detail_kb,
 )
@@ -29,6 +30,7 @@ from bot.services.settings import (
     convert_rub_to_stars,
 )
 from bot.services.mtproto import sync_mtproto_secrets, ensure_proxy_mtproto_secret, reenable_proxies_for_user
+from bot.services.freekassa import create_order
 from bot.utils import (
     generate_login,
     generate_password,
@@ -77,9 +79,12 @@ async def _send_or_edit_main_message(
     text: str,
     reply_markup=None,
     parse_mode: str | None = None,
+    force_new: bool = False,
 ) -> None:
     user = await dao.get_user_by_tg_id_any(db, message.from_user.id)
-    last_id = user["last_menu_message_id"] if user and user["last_menu_message_id"] else None
+    last_id = None
+    if not force_new:
+        last_id = user["last_menu_message_id"] if user and user["last_menu_message_id"] else None
     msg_id = await send_or_edit_bg_message(
         message.bot,
         message.chat.id,
@@ -282,6 +287,64 @@ async def _issue_invoice(bot: Bot, chat_id: int, db, user_id: int, rub: int) -> 
     )
 
 
+async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int) -> str:
+    config = runtime.config
+    if config is None:
+        return "FreeKassa не настроена."
+    if not config.freekassa_shop_id or not config.freekassa_api_key:
+        return "FreeKassa не настроена у администратора."
+    method = await get_int_setting(db, "freekassa_method", 44)
+    if method not in {36, 43, 44}:
+        method = 44
+    email = f"{tg_id}@telegram.org"
+    ip = config.freekassa_ip or config.proxy_default_ip or "127.0.0.1"
+    payment_id = await dao.create_payment(
+        db,
+        user_id=user_id,
+        amount=rub,
+        status="pending",
+        payload=f"freekassa:{user_id}:{rub}",
+    )
+    result = await create_order(
+        api_base=config.freekassa_api_base,
+        api_key=config.freekassa_api_key,
+        shop_id=config.freekassa_shop_id,
+        amount_rub=rub,
+        method=method,
+        email=email,
+        ip=ip,
+        payment_id=payment_id,
+    )
+    if result.get("error"):
+        return f"Ошибка FreeKassa: {result['error']}"
+    pay_url = result.get("payment_link")
+    if not pay_url:
+        return "Ошибка FreeKassa: не получена ссылка на оплату."
+    return (
+        f"Оплата FreeKassa на {rub} ₽\n"
+        f"{pay_url}\n\n"
+        "После оплаты баланс пополнится автоматически."
+    )
+
+
+async def _start_payment(
+    method: str,
+    bot: Bot,
+    db,
+    user_id: int,
+    tg_id: int,
+    rub: int,
+) -> str:
+    if method == "freekassa":
+        if not await get_bool_setting(db, "freekassa_enabled", False):
+            return "Оплата FreeKassa отключена."
+        return await _start_freekassa_payment(db, user_id, tg_id, rub)
+    if not await get_bool_setting(db, "stars_enabled", True):
+        return "Оплата Stars отключена."
+    await _issue_invoice(bot, tg_id, db, user_id, rub)
+    return f"Счёт выставлен на {rub} ₽. Оплатите, чтобы баланс пополнился."
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     config = runtime.config
@@ -315,6 +378,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 db,
                 text,
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+                force_new=True,
             )
             return
 
@@ -458,10 +522,18 @@ async def help_detail(call: CallbackQuery) -> None:
                 "3) Попробуйте включить/выключить прокси в настройках."
             )
         elif key == "pay":
+            stars_enabled = await get_bool_setting(db, "stars_enabled", True)
+            freekassa_enabled = await get_bool_setting(db, "freekassa_enabled", False)
+            if stars_enabled and freekassa_enabled:
+                pay_line = "Нажмите «⭐ Пополнить» и выберите Stars или FreeKassa."
+            elif freekassa_enabled:
+                pay_line = "Нажмите «⭐ Пополнить» и выберите FreeKassa."
+            else:
+                pay_line = "Нажмите «⭐ Пополнить» и выберите сумму."
             text = (
                 f"{header}\n\n"
                 "Как оплатить:\n"
-                "Нажмите «⭐ Пополнить» и выберите сумму.\n"
+                f"{pay_line}\n"
                 "После оплаты прокси включатся автоматически."
             )
         else:
@@ -699,6 +771,11 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
         if not user:
             await _safe_edit(call, "Нажмите /start")
             return
+        stars_enabled = await get_bool_setting(db, "stars_enabled", True)
+        freekassa_enabled = await get_bool_setting(db, "freekassa_enabled", False)
+        if not stars_enabled and not freekassa_enabled:
+            await _safe_edit(call, f"{header}\n\nСпособы пополнения временно отключены.")
+            return
         hint_enabled = await get_bool_setting(db, "stars_buy_hint_enabled", False)
         stars_url = await dao.get_setting(db, "stars_buy_url", "") or ""
         hint = ""
@@ -706,24 +783,88 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
             safe_url = html_escape(stars_url, quote=True)
             hint = f"\n\nЗВЕЗДЫ МОЖНО КУПИТЬ <a href=\"{safe_url}\">ТУТ</a>"
         await state.clear()
+        if stars_enabled and freekassa_enabled:
+            await _safe_edit(
+                call,
+                f"{header}\n\nВыберите способ оплаты.",
+                parse_mode="HTML",
+                reply_markup=topup_method_kb(True, True),
+            )
+            return
+        method = "stars" if stars_enabled else "freekassa"
+        extra = hint if (method == "stars") else ""
         await _safe_edit(
             call,
-            f"{header}\n\nВыберите сумму пополнения или нажмите «Ввести сумму».{hint}",
+            f"{header}\n\nВыберите сумму пополнения или нажмите «Ввести сумму».{extra}",
             parse_mode="HTML",
-            reply_markup=topup_quick_kb(),
+            reply_markup=topup_quick_kb(method, show_method_back=False),
         )
     finally:
         await db.close()
 
 
-@router.callback_query(F.data == "topup:custom")
+@router.callback_query(F.data.startswith("topup:method:"))
+async def topup_method_select(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) != 3:
+        return
+    method = parts[2]
+    if method not in {"stars", "freekassa"}:
+        return
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        user, header = await _get_user_and_header(db, call.from_user.id)
+        if not user:
+            await _safe_edit(call, "Нажмите /start")
+            return
+        stars_enabled = await get_bool_setting(db, "stars_enabled", True)
+        freekassa_enabled = await get_bool_setting(db, "freekassa_enabled", False)
+        if method == "stars" and not stars_enabled:
+            await _safe_edit(call, "Оплата Stars отключена.")
+            return
+        if method == "freekassa" and not freekassa_enabled:
+            await _safe_edit(call, "Оплата FreeKassa отключена.")
+            return
+
+        hint = ""
+        if method == "stars":
+            hint_enabled = await get_bool_setting(db, "stars_buy_hint_enabled", False)
+            stars_url = await dao.get_setting(db, "stars_buy_url", "") or ""
+            if hint_enabled and stars_url:
+                safe_url = html_escape(stars_url, quote=True)
+                hint = f"\n\nЗВЕЗДЫ МОЖНО КУПИТЬ <a href=\"{safe_url}\">ТУТ</a>"
+
+        await state.update_data(topup_method=method)
+        await _safe_edit(
+            call,
+            f"{header}\n\nВыберите сумму пополнения или нажмите «Ввести сумму».{hint}",
+            parse_mode="HTML",
+            reply_markup=topup_quick_kb(method, show_method_back=True),
+        )
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data.startswith("topup:custom"))
 async def topup_custom(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
+    parts = call.data.split(":")
+    if len(parts) >= 3:
+        method = parts[2]
+    else:
+        method = "stars"
+    if method not in {"stars", "freekassa"}:
+        method = "stars"
+    await state.update_data(topup_method=method)
     await state.set_state(UserStates.waiting_topup_amount)
     await _safe_edit(
         call,
         "Введите сумму пополнения в рублях (целое число).",
-        reply_markup=topup_quick_kb(),
+        reply_markup=topup_quick_kb(method, show_method_back=True),
     )
 
 
@@ -731,10 +872,18 @@ async def topup_custom(call: CallbackQuery, state: FSMContext) -> None:
 async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     parts = call.data.split(":")
-    if len(parts) != 3:
+    if len(parts) not in {3, 4}:
+        return
+    if len(parts) == 4:
+        method = parts[2]
+        amount_part = parts[3]
+    else:
+        method = "stars"
+        amount_part = parts[2]
+    if method not in {"stars", "freekassa"}:
         return
     try:
-        rub = int(parts[2])
+        rub = int(amount_part)
     except Exception:
         return
     if rub <= 0:
@@ -749,9 +898,9 @@ async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
         if not user:
             await _safe_edit(call, "Нажмите /start")
             return
-        await _issue_invoice(call.bot, call.from_user.id, db, user["id"], rub)
+        text = await _start_payment(method, call.bot, db, user["id"], call.from_user.id, rub)
         await state.clear()
-        await _safe_edit(call, f"Счёт выставлен на {rub} ₽. Оплатите, чтобы баланс пополнился.")
+        await _safe_edit(call, text, reply_markup=topup_quick_kb(method, show_method_back=True))
     finally:
         await db.close()
 
@@ -760,10 +909,18 @@ async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
 async def topup_days(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     parts = call.data.split(":")
-    if len(parts) != 3:
+    if len(parts) not in {3, 4}:
+        return
+    if len(parts) == 4:
+        method = parts[2]
+        days_part = parts[3]
+    else:
+        method = "stars"
+        days_part = parts[2]
+    if method not in {"stars", "freekassa"}:
         return
     try:
-        days = int(parts[2])
+        days = int(days_part)
     except Exception:
         return
     if days <= 0:
@@ -799,18 +956,17 @@ async def topup_days(call: CallbackQuery, state: FSMContext) -> None:
                 call,
                 f"Баланса уже хватает на {days} дней для {desired} прокси.\n"
                 "Если хотите, можете пополнить дополнительно.",
-                reply_markup=topup_quick_kb(),
+                reply_markup=topup_quick_kb(method, show_method_back=True),
             )
             return
 
         need = required - int(user["balance"])
-        await _issue_invoice(call.bot, call.from_user.id, db, user["id"], need)
+        text = await _start_payment(method, call.bot, db, user["id"], call.from_user.id, need)
         await state.clear()
         await _safe_edit(
             call,
-            f"Счёт выставлен на {need} ₽.\n"
-            f"Расчёт на {days} дней для {desired} прокси.",
-            reply_markup=topup_quick_kb(),
+            f"{text}\n\nРасчёт на {days} дней для {desired} прокси.",
+            reply_markup=topup_quick_kb(method, show_method_back=True),
         )
     finally:
         await db.close()
@@ -821,12 +977,19 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
     config = runtime.config
     if config is None:
         return
+    data = await state.get_data()
+    method = data.get("topup_method", "stars")
     try:
         rub = int(message.text.strip())
     except Exception:
         db = await get_db(config.db_path)
         try:
-            await _send_or_edit_main_message(message, db, "Введите целое число.", reply_markup=topup_quick_kb())
+            await _send_or_edit_main_message(
+                message,
+                db,
+                "Введите целое число.",
+                reply_markup=topup_quick_kb(method, show_method_back=True),
+            )
         finally:
             await db.close()
         return
@@ -834,7 +997,12 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
     if rub <= 0:
         db = await get_db(config.db_path)
         try:
-            await _send_or_edit_main_message(message, db, "Сумма должна быть больше 0.", reply_markup=topup_quick_kb())
+            await _send_or_edit_main_message(
+                message,
+                db,
+                "Сумма должна быть больше 0.",
+                reply_markup=topup_quick_kb(method, show_method_back=True),
+            )
         finally:
             await db.close()
         return
@@ -845,8 +1013,14 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
         if not user:
             await _send_or_edit_main_message(message, db, "Нажмите /start")
             return
-        await _issue_invoice(message.bot, message.from_user.id, db, user["id"], rub)
+        text = await _start_payment(method, message.bot, db, user["id"], message.from_user.id, rub)
         await state.clear()
+        await _send_or_edit_main_message(
+            message,
+            db,
+            text,
+            reply_markup=topup_quick_kb(method, show_method_back=True),
+        )
     finally:
         await db.close()
 
