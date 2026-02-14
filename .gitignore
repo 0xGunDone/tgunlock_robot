@@ -54,3 +54,4 @@ bot/storage/
 
 # Telegram bot specific
 *.session
+test_freekassa.py

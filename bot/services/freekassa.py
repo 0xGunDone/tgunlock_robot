@@ -87,11 +87,23 @@ async def create_order(
                 except Exception:
                     data = {"error": "Invalid JSON", "raw": text}
 
+                logger.info(
+                    "FreeKassa response: status=%s headers=%s body=%s",
+                    resp.status,
+                    dict(resp.headers),
+                    data
+                )
+
                 if resp.status != 200:
                     return {"error": data.get("message") or data.get("error") or "FreeKassa error"}
 
                 if not payment_link:
                     return {"error": "Не получена ссылка на оплату"}
+
+                # Исправляем невалидные URL от Freekassa (пробелы в параметрах)
+                if ' ' in payment_link and '?' in payment_link:
+                    base, params = payment_link.split('?', 1)
+                    payment_link = base + '?' + params.replace(' ', '%20')
 
                 return {
                     "payment_link": payment_link,
