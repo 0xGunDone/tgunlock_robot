@@ -16,3 +16,4 @@ class AdminStates(StatesGroup):
     waiting_broadcast_text = State()
     ref_code = State()
     ref_bonuses = State()
+    waiting_bg_image = State()

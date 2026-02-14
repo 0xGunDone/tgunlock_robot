@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import asyncio
 import os
 import re
+from pathlib import Path
 
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
@@ -100,6 +101,7 @@ def _settings_text(settings_map: dict[str, str]) -> str:
         f"Курс Stars: {val('stars_rate', '1')} ₽/⭐",
         f"Stars: {onoff('stars_enabled', '1')}",
         f"FreeKassa: {onoff('freekassa_enabled', '0')}",
+        f"Фон: {onoff('bg_enabled', '1')}",
         f"FK СБП: {onoff('freekassa_method_44_enabled', '1')}",
         f"FK Карта: {onoff('freekassa_method_36_enabled', '1')}",
         f"FK SberPay: {onoff('freekassa_method_43_enabled', '1')}",
@@ -964,8 +966,45 @@ async def admin_settings_pick(call: CallbackQuery, state: FSMContext) -> None:
         return
     await call.answer()
     key = call.data.split(":", 1)[1]
+    if key == "bg_image":
+        await state.set_state(AdminStates.waiting_bg_image)
+        await _safe_edit(call, "Отправьте новую картинку фона (фото).")
+        return
     await state.update_data(setting_key=key)
     await _safe_edit(call, f"Введите значение для `{key}`:", parse_mode=None)
+
+
+@router.message(AdminStates.waiting_bg_image)
+async def admin_bg_image(message: Message, state: FSMContext) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+    config = runtime.config
+    if config is None:
+        return
+    if not message.photo:
+        await _admin_send_or_edit(message, "Пожалуйста, отправьте фото.")
+        return
+    db = await get_db(config.db_path)
+    try:
+        photo = message.photo[-1]
+        file = await message.bot.get_file(photo.file_id)
+        dest = Path(__file__).resolve().parents[2] / "bg.jpg"
+        await message.bot.download_file(file.file_path, destination=dest)
+        await dao.set_setting(db, "bg_enabled", "1")
+        runtime.bg_enabled = True
+        settings_map = await dao.get_settings_map(db)
+        await _admin_send_or_edit(
+            message,
+            "Фон обновлён.",
+        )
+        await _admin_send_or_edit(
+            message,
+            _settings_text(settings_map),
+            reply_markup=admin_settings_kb(settings_map),
+        )
+        await state.clear()
+    finally:
+        await db.close()
 
 
 @router.callback_query(F.data.startswith("admin_settings_toggle:"))
@@ -984,6 +1023,8 @@ async def admin_settings_toggle(call: CallbackQuery, state: FSMContext) -> None:
         await dao.set_setting(db, key, new_value)
         if key == "mtproto_enabled":
             await sync_mtproto_secrets(db)
+        if key == "bg_enabled":
+            runtime.bg_enabled = new_value == "1"
         settings_map = await dao.get_settings_map(db)
         await _safe_edit(call, _settings_text(settings_map), reply_markup=admin_settings_kb(settings_map))
         await state.update_data(setting_key=None)

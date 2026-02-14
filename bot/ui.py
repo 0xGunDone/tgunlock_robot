@@ -5,6 +5,7 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.types import FSInputFile, InlineKeyboardMarkup
 from bot import dao
+from bot.runtime import runtime
 
 _BG_PATH = Path(__file__).resolve().parents[1] / "bg.jpg"
 _CAPTION_LIMIT = 1000
@@ -19,8 +20,11 @@ def clip_caption(text: str, limit: int = _CAPTION_LIMIT) -> str:
 
 
 def get_bg_file() -> FSInputFile | None:
-    if _BG_PATH.exists():
-        return FSInputFile(str(_BG_PATH))
+    if runtime.bg_enabled is False:
+        return None
+    path = Path(runtime.bg_path) if runtime.bg_path else _BG_PATH
+    if path.exists():
+        return FSInputFile(str(path))
     return None
 
 

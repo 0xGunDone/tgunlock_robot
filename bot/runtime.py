@@ -13,6 +13,8 @@ class Runtime:
     proxy_provider: Optional[ProxyProvider] = None
     mtproxy_last_state: Optional[str] = None
     mtproxy_last_alert_ts: Optional[float] = None
+    bg_enabled: bool = True
+    bg_path: Optional[str] = None
 
 
 runtime = Runtime()

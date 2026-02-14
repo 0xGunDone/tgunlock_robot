@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-STYLE_PRIMARY = "primary"
 STYLE_SUCCESS = "success"
+STYLE_PRIMARY = STYLE_SUCCESS
 STYLE_DANGER = "danger"
 
 
@@ -14,6 +14,8 @@ def _btn(
     style: str | None = None,
 ) -> InlineKeyboardButton:
     data: dict = {"text": text}
+    if style is None:
+        style = STYLE_SUCCESS
     if callback_data is not None:
         data["callback_data"] = callback_data
     if url is not None:
@@ -43,6 +45,12 @@ def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def back_main_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)]]
+    )
+
+
 def admin_menu_inline_kb() -> InlineKeyboardMarkup:
     buttons = [
         [
@@ -66,7 +74,7 @@ def admin_menu_inline_kb() -> InlineKeyboardMarkup:
             _btn("📣 Рассылка", callback_data="admin:broadcast", style=STYLE_PRIMARY),
         ],
         [
-            _btn("⬅️ Назад", callback_data="menu:main"),
+            _btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -75,7 +83,7 @@ def admin_menu_inline_kb() -> InlineKeyboardMarkup:
 def admin_referrals_kb() -> InlineKeyboardMarkup:
     buttons = [
         [_btn("Создать ссылку", callback_data="admin:ref_create", style=STYLE_SUCCESS)],
-        [_btn("⬅️ Назад", callback_data="menu:admin")],
+        [_btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -85,14 +93,14 @@ def admin_referrals_list_kb(codes: list[str]) -> InlineKeyboardMarkup:
     for code in codes:
         buttons.append([_btn(f"🗑 Удалить {code}", callback_data=f"admin_ref_del:{code}", style=STYLE_DANGER)])
     buttons.append([_btn("Создать ссылку", callback_data="admin:ref_create", style=STYLE_SUCCESS)])
-    buttons.append([_btn("⬅️ Назад", callback_data="menu:admin")])
+    buttons.append([_btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def admin_ref_delete_confirm_kb(code: str) -> InlineKeyboardMarkup:
     buttons = [
         [_btn("✅ Удалить", callback_data=f"admin_ref_del_confirm:{code}", style=STYLE_DANGER)],
-        [_btn("❌ Отмена", callback_data="admin:referrals")],
+        [_btn("❌ Отмена", callback_data="admin:referrals", style=STYLE_DANGER)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -125,7 +133,7 @@ def admin_user_actions_kb(user_id: int, blocked: bool) -> InlineKeyboardMarkup:
             _btn("Выкл все", callback_data=f"admin_user:disable_all:{user_id}", style=STYLE_DANGER),
         ],
         [
-            _btn("⬅️ Назад", callback_data="menu:admin"),
+            _btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -200,6 +208,18 @@ def admin_settings_kb(settings: dict[str, str]) -> InlineKeyboardMarkup:
         ],
         [
             _btn(
+                f"Фон: {_bool_label(val('bg_enabled', '1'))}",
+                callback_data="admin_settings_toggle:bg_enabled",
+                style=toggle_style("bg_enabled", "1"),
+            ),
+            _btn(
+                "Сменить фон",
+                callback_data="admin_settings_edit:bg_image",
+                style=STYLE_PRIMARY,
+            ),
+        ],
+        [
+            _btn(
                 f"FK СБП: {_bool_label(val('freekassa_method_44_enabled', '1'))}",
                 callback_data="admin_settings_toggle:freekassa_method_44_enabled",
                 style=toggle_style("freekassa_method_44_enabled", "1"),
@@ -256,7 +276,7 @@ def admin_settings_kb(settings: dict[str, str]) -> InlineKeyboardMarkup:
             ),
         ],
         [
-            _btn("⬅️ Назад", callback_data="menu:admin"),
+            _btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -267,7 +287,7 @@ def mtproxy_status_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [_btn("🔄 Обновить", callback_data="admin:mtproxy_refresh", style=STYLE_PRIMARY)],
             [_btn("📄 Логи", callback_data="admin:mtproxy_logs", style=STYLE_PRIMARY)],
-            [_btn("⬅️ Назад", callback_data="menu:admin")],
+            [_btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER)],
         ]
     )
 
@@ -276,7 +296,7 @@ def freekassa_status_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [_btn("🔄 Обновить", callback_data="admin:freekassa_refresh", style=STYLE_PRIMARY)],
-            [_btn("⬅️ Назад", callback_data="menu:admin")],
+            [_btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER)],
         ]
     )
 
@@ -287,7 +307,7 @@ def help_kb() -> InlineKeyboardMarkup:
             [_btn("Как включить/выключить", callback_data="help:toggle", style=STYLE_PRIMARY)],
             [_btn("Не подключается", callback_data="help:fail", style=STYLE_PRIMARY)],
             [_btn("Как оплатить", callback_data="help:pay", style=STYLE_PRIMARY)],
-            [_btn("⬅️ Назад", callback_data="menu:main")],
+            [_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)],
         ]
     )
 
@@ -295,7 +315,7 @@ def help_kb() -> InlineKeyboardMarkup:
 def help_detail_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [_btn("⬅️ Назад", callback_data="menu:help")],
+            [_btn("⬅️ Назад", callback_data="menu:help", style=STYLE_DANGER)],
         ]
     )
 
@@ -312,7 +332,7 @@ def admin_users_kb() -> InlineKeyboardMarkup:
                 _btn("Есть отключённые", callback_data="admin_users:disabled_proxies", style=STYLE_PRIMARY),
                 _btn("Новые 24ч", callback_data="admin_users:new24", style=STYLE_PRIMARY),
             ],
-            [_btn("⬅️ Назад", callback_data="menu:admin")],
+            [_btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER)],
         ]
     )
 
@@ -322,7 +342,7 @@ def admin_users_list_kb(users: list[dict]) -> InlineKeyboardMarkup:
     for u in users:
         label = f"{u['label']}"
         buttons.append([_btn(label, callback_data=f"admin_user:open:{u['id']}", style=STYLE_PRIMARY)])
-    buttons.append([_btn("⬅️ Назад", callback_data="admin:users")])
+    buttons.append([_btn("⬅️ Назад", callback_data="admin:users", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -340,7 +360,7 @@ def admin_export_kb() -> InlineKeyboardMarkup:
             [
                 _btn("Referrals", callback_data="admin_export:referrals", style=STYLE_PRIMARY),
             ],
-            [_btn("⬅️ Назад", callback_data="menu:admin")],
+            [_btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER)],
         ]
     )
 
@@ -355,7 +375,7 @@ def admin_user_proxies_kb(proxies: list[dict], user_id: int) -> InlineKeyboardMa
                 _btn("🗑", callback_data=f"admin_proxy:delete:{p['id']}", style=STYLE_DANGER),
             ]
         )
-    buttons.append([_btn("⬅️ Назад", callback_data=f"admin_user:open:{user_id}")])
+    buttons.append([_btn("⬅️ Назад", callback_data=f"admin_user:open:{user_id}", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -368,13 +388,13 @@ def proxies_list_kb(proxies: list[dict]) -> InlineKeyboardMarkup:
                 _btn("🗑", callback_data=f"proxy:delete:{p['id']}", style=STYLE_DANGER),
             ]
         )
-    buttons.append([_btn("⬅️ Назад", callback_data="menu:main")])
+    buttons.append([_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def proxy_detail_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[_btn("⬅️ Назад", callback_data="menu:proxies")]]
+        inline_keyboard=[[_btn("⬅️ Назад", callback_data="menu:proxies", style=STYLE_DANGER)]]
     )
 
 
@@ -382,7 +402,7 @@ def proxies_empty_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [_btn("➕ Купить прокси", callback_data="proxy:buy", style=STYLE_SUCCESS)],
-            [_btn("⬅️ Назад", callback_data="menu:main")],
+            [_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)],
         ]
     )
 
@@ -392,7 +412,7 @@ def proxy_delete_confirm_kb(proxy_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 _btn("✅ Да, удалить", callback_data=f"proxy:delete_confirm:{proxy_id}", style=STYLE_DANGER),
-                _btn("❌ Отмена", callback_data="menu:proxies"),
+                _btn("❌ Отмена", callback_data="menu:proxies", style=STYLE_DANGER),
             ]
         ]
     )
@@ -404,7 +424,7 @@ def topup_method_kb(stars_enabled: bool, freekassa_enabled: bool) -> InlineKeybo
         buttons.append([_btn("⭐ Stars", callback_data="topup:method:stars", style=STYLE_PRIMARY)])
     if freekassa_enabled:
         buttons.append([_btn("💳 FreeKassa", callback_data="topup:method:freekassa", style=STYLE_PRIMARY)])
-    buttons.append([_btn("⬅️ Назад", callback_data="menu:main")])
+    buttons.append([_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -430,8 +450,8 @@ def freekassa_method_kb(
         buttons.append(
             [_btn(f"СберPay — {total_str} ₽", callback_data="fk:pay:43", style=STYLE_PRIMARY)]
         )
-    buttons.append([_btn("⬅️ Назад", callback_data="fk:amounts_back")])
-    buttons.append([_btn("⬅️ В главное меню", callback_data="menu:main")])
+    buttons.append([_btn("⬅️ Назад", callback_data="fk:amounts_back", style=STYLE_DANGER)])
+    buttons.append([_btn("⬅️ В главное меню", callback_data="menu:main", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -454,8 +474,8 @@ def freekassa_amount_kb(fee_percent: float = 12.5) -> InlineKeyboardMarkup:
             _btn(label(5000), callback_data="topup:amount:freekassa:5000", style=STYLE_SUCCESS),
         ],
         [_btn("✍️ Ввести сумму", callback_data="topup:custom:freekassa", style=STYLE_PRIMARY)],
-        [_btn("⬅️ К способам оплаты", callback_data="menu:topup")],
-        [_btn("⬅️ Назад", callback_data="menu:main")],
+        [_btn("⬅️ К способам оплаты", callback_data="menu:topup", style=STYLE_DANGER)],
+        [_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -476,8 +496,8 @@ def topup_quick_kb(method: str, show_method_back: bool = False) -> InlineKeyboar
         [_btn("✍️ Ввести сумму", callback_data=f"topup:custom:{method}", style=STYLE_PRIMARY)],
     ]
     if show_method_back:
-        buttons.append([_btn("⬅️ К способам оплаты", callback_data="menu:topup")])
-    buttons.append([_btn("⬅️ Назад", callback_data="menu:main")])
+        buttons.append([_btn("⬅️ К способам оплаты", callback_data="menu:topup", style=STYLE_DANGER)])
+    buttons.append([_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -485,7 +505,7 @@ def freekassa_pay_kb(payment_id: int, pay_url: str) -> InlineKeyboardMarkup:
     buttons = [
         [_btn("✅ Оплатить", url=pay_url, style=STYLE_SUCCESS)],
         [_btn("❌ Отменить", callback_data=f"fk:cancel:{payment_id}", style=STYLE_DANGER)],
-        [_btn("⬅️ Назад", callback_data="menu:topup")],
+        [_btn("⬅️ Назад", callback_data="menu:topup", style=STYLE_DANGER)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

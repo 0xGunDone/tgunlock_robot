@@ -82,6 +82,8 @@ async def on_startup() -> None:
         await init_db(db)
         await ensure_default_settings(db)
         await sync_mtproto_secrets(db)
+        bg_enabled = await dao.get_setting(db, "bg_enabled", "1")
+        runtime.bg_enabled = str(bg_enabled) == "1"
     finally:
         await db.close()
 

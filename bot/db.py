@@ -23,6 +23,7 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "ref_bonus_invited": "10",
     "max_active_proxies": "10",
     "referral_enabled": "1",
+    "bg_enabled": "1",
 }
 
 
