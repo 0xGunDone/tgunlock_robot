@@ -33,7 +33,7 @@ from bot.services.settings import (
     convert_rub_to_stars,
 )
 from bot.services.mtproto import sync_mtproto_secrets, ensure_proxy_mtproto_secret, reenable_proxies_for_user
-from bot.services.freekassa import create_order
+from bot.services.freekassa import create_order, get_available_methods
 
 FREEKASSA_FEE_PERCENT = 12.5
 FREEKASSA_METHOD_OPTIONS = [
@@ -901,8 +901,6 @@ async def freekassa_pay(call: CallbackQuery, state: FSMContext) -> None:
     if not parts[2].isdigit():
         return
     method_value = int(parts[2])
-    if method_value not in {44, 36, 43}:
-        return
 
     config = runtime.config
     if config is None:
@@ -931,10 +929,16 @@ async def freekassa_pay(call: CallbackQuery, state: FSMContext) -> None:
         rub_value = int(rub)
         fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, rub_value, method_value)
         if fk.get("error"):
+            # Получаем доступные методы для повторной попытки
+            methods = await get_available_methods(
+                config.freekassa_api_base,
+                config.freekassa_api_key,
+                config.freekassa_shop_id,
+            )
             await _safe_edit(
                 call,
-                fk["error"],
-                reply_markup=freekassa_method_kb(int(rub), FREEKASSA_FEE_PERCENT),
+                f"{header}\n\n{fk['error']}\n\nВыберите другой способ оплаты.",
+                reply_markup=freekassa_method_kb(int(rub), FREEKASSA_FEE_PERCENT, methods),
             )
             return
 
@@ -1012,10 +1016,18 @@ async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
                 return
             await state.update_data(topup_method="freekassa", fk_amount=rub, fk_note=None)
             await state.set_state(None)
+            
+            # Получаем доступные методы
+            methods = await get_available_methods(
+                config.freekassa_api_base,
+                config.freekassa_api_key,
+                config.freekassa_shop_id,
+            )
+            
             await _safe_edit(
                 call,
                 f"{header}\n\nСумма пополнения: {rub} ₽\nВыберите способ оплаты.",
-                reply_markup=freekassa_method_kb(rub, FREEKASSA_FEE_PERCENT),
+                reply_markup=freekassa_method_kb(rub, FREEKASSA_FEE_PERCENT, methods),
             )
             return
 
@@ -1094,10 +1106,18 @@ async def topup_days(call: CallbackQuery, state: FSMContext) -> None:
             note = f"Расчёт на {days} дней для {desired} прокси."
             await state.update_data(topup_method="freekassa", fk_amount=need, fk_note=note)
             await state.set_state(None)
+            
+            # Получаем доступные методы
+            methods = await get_available_methods(
+                config.freekassa_api_base,
+                config.freekassa_api_key,
+                config.freekassa_shop_id,
+            )
+            
             await _safe_edit(
                 call,
                 f"{header}\n\nСумма пополнения: {need} ₽\n{note}\nВыберите способ оплаты.",
-                reply_markup=freekassa_method_kb(need, FREEKASSA_FEE_PERCENT),
+                reply_markup=freekassa_method_kb(need, FREEKASSA_FEE_PERCENT, methods),
             )
             return
 
@@ -1168,11 +1188,19 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
             await state.update_data(topup_method="freekassa", fk_amount=rub, fk_note=None)
             await state.set_state(None)
             user_row, header = await _get_user_and_header(db, message.from_user.id)
+            
+            # Получаем доступные методы
+            methods = await get_available_methods(
+                config.freekassa_api_base,
+                config.freekassa_api_key,
+                config.freekassa_shop_id,
+            )
+            
             await _send_or_edit_main_message(
                 message,
                 db,
                 f"{header}\n\nСумма пополнения: {rub} ₽\nВыберите способ оплаты.",
-                reply_markup=freekassa_method_kb(rub, FREEKASSA_FEE_PERCENT),
+                reply_markup=freekassa_method_kb(rub, FREEKASSA_FEE_PERCENT, methods),
             )
             return
 

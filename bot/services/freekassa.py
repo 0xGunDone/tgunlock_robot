@@ -145,6 +145,46 @@ async def get_currencies(api_base: str, api_key: str, shop_id: str) -> Dict[str,
             return data
 
 
+async def get_available_methods(api_base: str, api_key: str, shop_id: str) -> list[dict]:
+    """Получает список доступных методов оплаты (RUB, enabled, без обязательных полей)."""
+    data = await get_currencies(api_base, api_key, shop_id)
+    if data.get("error"):
+        logger.error("Ошибка получения методов FreeKassa: %s", data["error"])
+        return []
+    
+    items = data.get("currencies") or data.get("data") or []
+    available = []
+    
+    for item in items:
+        # Проверяем валюту
+        currency = item.get("currency") or item.get("cur") or ""
+        if currency != "RUB":
+            continue
+        
+        # Проверяем что метод включен
+        enabled = item.get("is_enabled") or item.get("enabled")
+        if not enabled or str(enabled) == "0":
+            continue
+        
+        # Проверяем что нет обязательных полей
+        fields = item.get("fields") or []
+        if isinstance(fields, list) and len(fields) > 0:
+            continue
+        
+        method_id = item.get("id") or item.get("currency_id") or item.get("method_id")
+        name = item.get("name") or item.get("title") or item.get("method") or f"Метод {method_id}"
+        
+        if method_id:
+            available.append({
+                "id": int(method_id),
+                "name": name,
+                "currency": currency,
+            })
+    
+    logger.info("Доступные методы FreeKassa: %s", available)
+    return available
+
+
 def verify_notification(data: dict[str, str], shop_id: str, secret_word_2: str) -> bool:
     merchant_id = data.get("MERCHANT_ID") or data.get("merchant_id") or ""
     amount = data.get("AMOUNT") or data.get("amount") or ""
