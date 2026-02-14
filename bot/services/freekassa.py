@@ -68,47 +68,31 @@ async def create_order(
 
         api_url = f"{api_base.rstrip('/')}/orders/create"
         logger.info(
-            "FreeKassa create: method=%s amount=%s amount_value=%s email=%s ip=%s",
+            "FreeKassa create: method=%s amount=%s email=%s ip=%s",
             method,
-            amount_rub,
             amount_value,
             email,
             ip,
         )
-        logger.info("FreeKassa payload (без signature): %s", {k: v for k, v in payload.items() if k != "signature"})
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.post(api_url, json=payload, headers=headers) as resp:
                 text = await resp.text()
-                logger.info("FreeKassa response: status=%s, text=%s", resp.status, text[:500])
-                logger.info("FreeKassa response headers: %s", dict(resp.headers))
-                
                 payment_link = resp.headers.get("Location")
-                logger.info("FreeKassa Location header: %s", payment_link)
-                
                 data: dict = {}
                 try:
                     data = await resp.json(encoding="utf-8")
-                    logger.info("FreeKassa response JSON: %s", data)
                     if "location" in data and not payment_link:
                         payment_link = data["location"]
-                        logger.info("FreeKassa location from JSON: %s", payment_link)
-                except Exception as e:
-                    logger.error("Ошибка парсинга JSON ответа FreeKassa: %s", e)
+                except Exception:
                     data = {"error": "Invalid JSON", "raw": text}
 
                 if resp.status != 200:
-                    error_msg = data.get("message") or data.get("error") or "Unknown error"
-                    logger.error("Ошибка FreeKassa при создании платежа: %s", error_msg)
-                    return {"error": error_msg, "message": error_msg}
+                    return {"error": data.get("message") or data.get("error") or "FreeKassa error"}
 
                 if not payment_link:
-                    error_msg = "Не получена ссылка на оплату от FreeKassa"
-                    logger.error(error_msg)
-                    logger.error("Response data: %s", data)
-                    return {"error": error_msg, "message": error_msg}
+                    return {"error": "Не получена ссылка на оплату"}
 
-                logger.info("FreeKassa платеж создан успешно: payment_link=%s", payment_link)
                 return {
                     "payment_link": payment_link,
                     "order_id": data.get("orderId") or data.get("id"),
@@ -116,7 +100,7 @@ async def create_order(
                 }
     except Exception as exc:
         logger.error("FreeKassa create error: %s", exc, exc_info=True)
-        return {"error": "FreeKassa error", "message": str(exc)}
+        return {"error": "FreeKassa error"}
 
 
 async def get_currencies(api_base: str, api_key: str, shop_id: str) -> Dict[str, Any]:
@@ -145,68 +129,19 @@ async def get_currencies(api_base: str, api_key: str, shop_id: str) -> Dict[str,
             return data
 
 
-async def get_available_methods(api_base: str, api_key: str, shop_id: str) -> list[dict]:
-    """Получает список доступных методов оплаты (RUB, enabled, без обязательных полей)."""
-    data = await get_currencies(api_base, api_key, shop_id)
-    if data.get("error"):
-        logger.error("Ошибка получения методов FreeKassa: %s", data["error"])
-        return []
-    
-    items = data.get("currencies") or data.get("data") or []
-    available = []
-    
-    for item in items:
-        # Проверяем валюту
-        currency = item.get("currency") or item.get("cur") or ""
-        if currency != "RUB":
-            continue
-        
-        # Проверяем что метод включен
-        enabled = item.get("is_enabled") or item.get("enabled")
-        if not enabled or str(enabled) == "0":
-            continue
-        
-        # Проверяем что нет обязательных полей
-        fields = item.get("fields") or []
-        if isinstance(fields, list) and len(fields) > 0:
-            continue
-        
-        method_id = item.get("id") or item.get("currency_id") or item.get("method_id")
-        name = item.get("name") or item.get("title") or item.get("method") or f"Метод {method_id}"
-        
-        if method_id:
-            available.append({
-                "id": int(method_id),
-                "name": name,
-                "currency": currency,
-            })
-    
-    logger.info("Доступные методы FreeKassa: %s", available)
-    return available
-
-
 def verify_notification(data: dict[str, str], shop_id: str, secret_word_2: str) -> bool:
     merchant_id = data.get("MERCHANT_ID") or data.get("merchant_id") or ""
     amount = data.get("AMOUNT") or data.get("amount") or ""
     order_id = data.get("MERCHANT_ORDER_ID") or data.get("merchant_order_id") or ""
     sign = (data.get("SIGN") or data.get("sign") or "").lower()
 
-    logger.info("FreeKassa webhook verify: merchant_id=%s, amount=%s, order_id=%s, sign=%s", 
-                merchant_id, amount, order_id, sign[:10] + "..." if sign else "")
-
     if not (merchant_id and amount and order_id and sign):
-        logger.warning("Недостаточно данных для проверки подписи")
         return False
     if merchant_id != shop_id:
-        logger.warning("merchant_id не совпадает с shop_id: %s != %s", merchant_id, shop_id)
         return False
 
     sign_string = f"{merchant_id}:{amount}:{secret_word_2}:{order_id}"
     expected = hashlib.md5(sign_string.encode("utf-8")).hexdigest().lower()
-    
-    logger.info("FreeKassa sign_string: %s", sign_string.replace(secret_word_2, "***"))
-    logger.info("FreeKassa expected: %s, got: %s, match: %s", expected, sign, expected == sign)
-    
     return expected == sign
 
 

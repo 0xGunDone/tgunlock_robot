@@ -33,7 +33,7 @@ from bot.services.settings import (
     convert_rub_to_stars,
 )
 from bot.services.mtproto import sync_mtproto_secrets, ensure_proxy_mtproto_secret, reenable_proxies_for_user
-from bot.services.freekassa import create_order, get_available_methods
+from bot.services.freekassa import create_order
 
 FREEKASSA_FEE_PERCENT = 12.5
 FREEKASSA_METHOD_OPTIONS = [
@@ -126,6 +126,13 @@ async def _get_user_and_header(db, tg_id: int) -> tuple[object | None, str | Non
     active = await dao.count_active_proxies(db, user_id=user["id"])
     header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
     return user, header
+
+
+async def _freekassa_method_flags(db) -> tuple[bool, bool, bool]:
+    enable_44 = await get_bool_setting(db, "freekassa_method_44_enabled", True)
+    enable_36 = await get_bool_setting(db, "freekassa_method_36_enabled", True)
+    enable_43 = await get_bool_setting(db, "freekassa_method_43_enabled", True)
+    return enable_44, enable_36, enable_43
 
 
 async def _safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
@@ -778,6 +785,14 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
             return
         stars_enabled = await get_bool_setting(db, "stars_enabled", True)
         freekassa_enabled = await get_bool_setting(db, "freekassa_enabled", False)
+        if freekassa_enabled:
+            enable_44, enable_36, enable_43 = await _freekassa_method_flags(db)
+            if not (enable_44 or enable_36 or enable_43):
+                freekassa_enabled = False
+        if freekassa_enabled:
+            enable_44, enable_36, enable_43 = await _freekassa_method_flags(db)
+            if not (enable_44 or enable_36 or enable_43):
+                freekassa_enabled = False
         if not stars_enabled and not freekassa_enabled:
             await _safe_edit(call, f"{header}\n\nСпособы пополнения временно отключены.")
             return
@@ -901,6 +916,8 @@ async def freekassa_pay(call: CallbackQuery, state: FSMContext) -> None:
     if not parts[2].isdigit():
         return
     method_value = int(parts[2])
+    if method_value not in {44, 36, 43}:
+        return
 
     config = runtime.config
     if config is None:
@@ -914,6 +931,7 @@ async def freekassa_pay(call: CallbackQuery, state: FSMContext) -> None:
         if not await get_bool_setting(db, "freekassa_enabled", False):
             await _safe_edit(call, "Оплата FreeKassa отключена.")
             return
+        enable_44, enable_36, enable_43 = await _freekassa_method_flags(db)
 
         data = await state.get_data()
         rub = data.get("fk_amount")
@@ -927,18 +945,57 @@ async def freekassa_pay(call: CallbackQuery, state: FSMContext) -> None:
             return
 
         rub_value = int(rub)
-        fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, rub_value, method_value)
-        if fk.get("error"):
-            # Получаем доступные методы для повторной попытки
-            methods = await get_available_methods(
-                config.freekassa_api_base,
-                config.freekassa_api_key,
-                config.freekassa_shop_id,
-            )
+        if method_value == 44 and not enable_44:
             await _safe_edit(
                 call,
-                f"{header}\n\n{fk['error']}\n\nВыберите другой способ оплаты.",
-                reply_markup=freekassa_method_kb(int(rub), FREEKASSA_FEE_PERCENT, methods),
+                "СБП QR отключён в настройках.",
+                reply_markup=freekassa_method_kb(
+                    rub_value,
+                    FREEKASSA_FEE_PERCENT,
+                    enable_44,
+                    enable_36,
+                    enable_43,
+                ),
+            )
+            return
+        if method_value == 36 and not enable_36:
+            await _safe_edit(
+                call,
+                "Оплата картой отключена в настройках.",
+                reply_markup=freekassa_method_kb(
+                    rub_value,
+                    FREEKASSA_FEE_PERCENT,
+                    enable_44,
+                    enable_36,
+                    enable_43,
+                ),
+            )
+            return
+        if method_value == 43 and not enable_43:
+            await _safe_edit(
+                call,
+                "SberPay отключён в настройках.",
+                reply_markup=freekassa_method_kb(
+                    rub_value,
+                    FREEKASSA_FEE_PERCENT,
+                    enable_44,
+                    enable_36,
+                    enable_43,
+                ),
+            )
+            return
+        fk = await _start_freekassa_payment(db, user["id"], call.from_user.id, rub_value, method_value)
+        if fk.get("error"):
+            await _safe_edit(
+                call,
+                fk["error"],
+                reply_markup=freekassa_method_kb(
+                    int(rub),
+                    FREEKASSA_FEE_PERCENT,
+                    enable_44,
+                    enable_36,
+                    enable_43,
+                ),
             )
             return
 
@@ -1014,20 +1071,22 @@ async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
             if not await get_bool_setting(db, "freekassa_enabled", False):
                 await _safe_edit(call, "Оплата FreeKassa отключена.")
                 return
+            enable_44, enable_36, enable_43 = await _freekassa_method_flags(db)
+            if not (enable_44 or enable_36 or enable_43):
+                await _safe_edit(call, "Способы оплаты FreeKassa отключены.")
+                return
             await state.update_data(topup_method="freekassa", fk_amount=rub, fk_note=None)
             await state.set_state(None)
-            
-            # Получаем доступные методы
-            methods = await get_available_methods(
-                config.freekassa_api_base,
-                config.freekassa_api_key,
-                config.freekassa_shop_id,
-            )
-            
             await _safe_edit(
                 call,
                 f"{header}\n\nСумма пополнения: {rub} ₽\nВыберите способ оплаты.",
-                reply_markup=freekassa_method_kb(rub, FREEKASSA_FEE_PERCENT, methods),
+                reply_markup=freekassa_method_kb(
+                    rub,
+                    FREEKASSA_FEE_PERCENT,
+                    enable_44,
+                    enable_36,
+                    enable_43,
+                ),
             )
             return
 
@@ -1103,21 +1162,23 @@ async def topup_days(call: CallbackQuery, state: FSMContext) -> None:
             if not await get_bool_setting(db, "freekassa_enabled", False):
                 await _safe_edit(call, "Оплата FreeKassa отключена.")
                 return
+            enable_44, enable_36, enable_43 = await _freekassa_method_flags(db)
+            if not (enable_44 or enable_36 or enable_43):
+                await _safe_edit(call, "Способы оплаты FreeKassa отключены.")
+                return
             note = f"Расчёт на {days} дней для {desired} прокси."
             await state.update_data(topup_method="freekassa", fk_amount=need, fk_note=note)
             await state.set_state(None)
-            
-            # Получаем доступные методы
-            methods = await get_available_methods(
-                config.freekassa_api_base,
-                config.freekassa_api_key,
-                config.freekassa_shop_id,
-            )
-            
             await _safe_edit(
                 call,
                 f"{header}\n\nСумма пополнения: {need} ₽\n{note}\nВыберите способ оплаты.",
-                reply_markup=freekassa_method_kb(need, FREEKASSA_FEE_PERCENT, methods),
+                reply_markup=freekassa_method_kb(
+                    need,
+                    FREEKASSA_FEE_PERCENT,
+                    enable_44,
+                    enable_36,
+                    enable_43,
+                ),
             )
             return
 
@@ -1185,22 +1246,24 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
             if not await get_bool_setting(db, "freekassa_enabled", False):
                 await _send_or_edit_main_message(message, db, "Оплата FreeKassa отключена.")
                 return
+            enable_44, enable_36, enable_43 = await _freekassa_method_flags(db)
+            if not (enable_44 or enable_36 or enable_43):
+                await _send_or_edit_main_message(message, db, "Способы оплаты FreeKassa отключены.")
+                return
             await state.update_data(topup_method="freekassa", fk_amount=rub, fk_note=None)
             await state.set_state(None)
             user_row, header = await _get_user_and_header(db, message.from_user.id)
-            
-            # Получаем доступные методы
-            methods = await get_available_methods(
-                config.freekassa_api_base,
-                config.freekassa_api_key,
-                config.freekassa_shop_id,
-            )
-            
             await _send_or_edit_main_message(
                 message,
                 db,
                 f"{header}\n\nСумма пополнения: {rub} ₽\nВыберите способ оплаты.",
-                reply_markup=freekassa_method_kb(rub, FREEKASSA_FEE_PERCENT, methods),
+                reply_markup=freekassa_method_kb(
+                    rub,
+                    FREEKASSA_FEE_PERCENT,
+                    enable_44,
+                    enable_36,
+                    enable_43,
+                ),
             )
             return
 

@@ -167,6 +167,22 @@ def admin_settings_kb(settings: dict[str, str]) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
+                text=f"FK СБП: {_bool_label(val('freekassa_method_44_enabled', '1'))}",
+                callback_data="admin_settings_toggle:freekassa_method_44_enabled",
+            ),
+            InlineKeyboardButton(
+                text=f"FK Карта: {_bool_label(val('freekassa_method_36_enabled', '1'))}",
+                callback_data="admin_settings_toggle:freekassa_method_36_enabled",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"FK SberPay: {_bool_label(val('freekassa_method_43_enabled', '1'))}",
+                callback_data="admin_settings_toggle:freekassa_method_43_enabled",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 text=f"Рефералка: {_bool_label(val('referral_enabled', '1'))}",
                 callback_data="admin_settings_toggle:referral_enabled",
             ),
@@ -350,44 +366,30 @@ def topup_method_kb(stars_enabled: bool, freekassa_enabled: bool) -> InlineKeybo
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def freekassa_method_kb(amount: int, fee_percent: float = 12.5, methods: list[dict] | None = None) -> InlineKeyboardMarkup:
-    """
-    Создает клавиатуру с методами оплаты Freekassa.
-    
-    Args:
-        amount: Сумма пополнения
-        fee_percent: Процент комиссии
-        methods: Список доступных методов [{"id": 36, "name": "Банковская карта"}, ...]
-    """
+def freekassa_method_kb(
+    amount: int,
+    fee_percent: float = 12.5,
+    enable_44: bool = True,
+    enable_36: bool = True,
+    enable_43: bool = True,
+) -> InlineKeyboardMarkup:
     total = amount * (1 + fee_percent / 100)
     total_str = f"{total:.2f}".rstrip("0").rstrip(".")
-    
     buttons = []
-    
-    if methods:
-        # Динамически создаем кнопки из доступных методов
-        for method in methods:
-            method_id = method.get("id")
-            method_name = method.get("name", f"Метод {method_id}")
-            buttons.append([
-                InlineKeyboardButton(
-                    text=f"{method_name} — {total_str} ₽",
-                    callback_data=f"fk:pay:{method_id}"
-                )
-            ])
-    else:
-        # Fallback на старые методы если не удалось получить список
-        buttons = [
-            [InlineKeyboardButton(text=f"СБП QR (НСПК) — {total_str} ₽", callback_data="fk:pay:44")],
-            [InlineKeyboardButton(text=f"Банковская карта РФ — {total_str} ₽", callback_data="fk:pay:36")],
-            [InlineKeyboardButton(text=f"СберPay — {total_str} ₽", callback_data="fk:pay:43")],
-        ]
-    
-    buttons.extend([
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="fk:amounts_back")],
-        [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="menu:main")],
-    ])
-    
+    if enable_44:
+        buttons.append(
+            [InlineKeyboardButton(text=f"СБП QR (НСПК) — {total_str} ₽", callback_data="fk:pay:44")]
+        )
+    if enable_36:
+        buttons.append(
+            [InlineKeyboardButton(text=f"Банковская карта РФ — {total_str} ₽", callback_data="fk:pay:36")]
+        )
+    if enable_43:
+        buttons.append(
+            [InlineKeyboardButton(text=f"СберPay — {total_str} ₽", callback_data="fk:pay:43")]
+        )
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="fk:amounts_back")])
+    buttons.append([InlineKeyboardButton(text="⬅️ В главное меню", callback_data="menu:main")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
