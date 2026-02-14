@@ -147,23 +147,34 @@ async def health() -> dict:
 
 @app.post(FREEKASSA_PATH)
 async def freekassa_webhook(request: Request) -> Response:
+    logger.info("FreeKassa webhook received")
     if not (config.freekassa_shop_id and config.freekassa_secret2):
+        logger.warning("FreeKassa не настроена: shop_id или secret2 отсутствуют")
         return PlainTextResponse("NO", status_code=400)
     data: dict[str, str] = {}
     try:
         form = await request.form()
         data = {k: str(v) for k, v in form.items()}
-    except Exception:
+        logger.info("FreeKassa webhook data (form): %s", data)
+    except Exception as e:
+        logger.warning("Не удалось распарсить form, пробуем body: %s", e)
         body = await request.body()
         raw = body.decode("utf-8") if body else ""
+        logger.info("FreeKassa webhook raw body: %s", raw)
         parsed = parse_qs(raw, keep_blank_values=True)
         data = {k: v[0] for k, v in parsed.items()}
+        logger.info("FreeKassa webhook data (parsed): %s", data)
+    
     if not verify_notification(data, config.freekassa_shop_id, config.freekassa_secret2):
+        logger.error("FreeKassa webhook: подпись не прошла проверку")
         return PlainTextResponse("NO", status_code=400)
 
     order_id = data.get("MERCHANT_ORDER_ID") or data.get("merchant_order_id")
     amount = data.get("AMOUNT") or data.get("amount") or ""
+    logger.info("FreeKassa webhook: order_id=%s, amount=%s", order_id, amount)
+    
     if not order_id or not order_id.isdigit():
+        logger.error("FreeKassa webhook: некорректный order_id=%s", order_id)
         return PlainTextResponse("NO", status_code=400)
 
     payment_id = int(order_id)
@@ -171,21 +182,29 @@ async def freekassa_webhook(request: Request) -> Response:
     try:
         payment = await dao.get_payment_by_id(db, payment_id)
         if not payment:
+            logger.error("FreeKassa webhook: платеж не найден, payment_id=%s", payment_id)
             return PlainTextResponse("NO", status_code=404)
         if payment["status"] == "paid":
+            logger.info("FreeKassa webhook: платеж уже оплачен, payment_id=%s", payment_id)
             return PlainTextResponse("YES")
         if not amount_matches(payment["amount"], amount):
+            logger.error("FreeKassa webhook: сумма не совпадает, expected=%s, got=%s", 
+                        payment["amount"], amount)
             await dao.update_payment_status(
                 db, payment_id, "failed", provider_payment_id=f"freekassa:{payment_id}"
             )
             return PlainTextResponse("NO", status_code=400)
 
+        logger.info("FreeKassa webhook: обновляем платеж как оплаченный, payment_id=%s", payment_id)
         await dao.update_payment_status(
             db, payment_id, "paid", provider_payment_id=f"freekassa:{payment_id}"
         )
         await dao.add_user_balance(db, payment["user_id"], payment["amount"])
+        logger.info("FreeKassa webhook: баланс пополнен, user_id=%s, amount=%s", 
+                   payment["user_id"], payment["amount"])
         reenabled = await reenable_proxies_for_user(db, payment["user_id"])
         if reenabled:
+            logger.info("FreeKassa webhook: прокси переактивированы для user_id=%s", payment["user_id"])
             await sync_mtproto_secrets(db)
 
         user = await dao.get_user_by_id(db, payment["user_id"])
@@ -206,10 +225,12 @@ async def freekassa_webhook(request: Request) -> Response:
                     text,
                     reply_markup=main_menu_inline_kb(is_admin),
                 )
-            except Exception:
-                pass
+                logger.info("FreeKassa webhook: уведомление отправлено пользователю tg_id=%s", user["tg_id"])
+            except Exception as e:
+                logger.error("FreeKassa webhook: ошибка отправки уведомления: %s", e)
     finally:
         await db.close()
+    logger.info("FreeKassa webhook: успешно обработан, payment_id=%s", payment_id)
     return PlainTextResponse("YES")
 
 
