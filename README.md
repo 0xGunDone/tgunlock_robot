@@ -49,12 +49,19 @@ Webhook будет установлен автоматически на `WEBHOOK
 8. `stars_rate = 1` — курс Stars к рублю (1 Star = 1 ₽).
 9. `stars_enabled = 1` — включить оплату Stars (0/1).
 10. `freekassa_enabled = 0` — включить оплату FreeKassa (0/1).
-11. Метод FreeKassa выбирается автоматически из доступных в кабинете (RUB, включённые, без доп. полей).
-12. `stars_buy_url = ""` — ссылка где купить Stars (если нужна подсказка).
-13. `stars_buy_hint_enabled = 0` — показывать подсказку где купить Stars (0/1).
-14. `mtproto_enabled = 1` — показывать MTProto ссылку (0/1).
-15. `mtproto_host = ""` — хост MTProto (если пусто, используется `PROXY_DEFAULT_IP`).
-16. `mtproto_port = 9443` — порт MTProto.
+11. `freekassa_method_44_enabled = 1` — включить СБП QR (id 44).
+12. `freekassa_method_36_enabled = 1` — включить карты РФ (id 36).
+13. `freekassa_method_43_enabled = 1` — включить SberPay (id 43).
+14. `stars_buy_url = ""` — ссылка где купить Stars (если нужна подсказка).
+15. `stars_buy_hint_enabled = 0` — показывать подсказку где купить Stars (0/1).
+16. `mtproto_enabled = 1` — показывать MTProto ссылку (0/1).
+17. `mtproto_host = ""` — хост MTProto (если пусто, используется `PROXY_DEFAULT_IP`).
+18. `mtproto_port = 9443` — порт MTProto.
+19. `bg_enabled = 1` — включить фоновую картинку в меню (0/1).
+20. `offer_enabled = 1` — показывать публичную оферту при `/start` (0/1).
+21. `policy_enabled = 1` — показывать политику при `/start` (0/1).
+22. `offer_url = ""` — ссылка на оферту.
+23. `policy_url = ""` — ссылка на политику.
 
 `mtproto_secret` больше не настраивается вручную — секрет создаётся автоматически для каждого прокси.
 
@@ -108,4 +115,8 @@ free_credit 50
 stars_rate 1
 ref_bonus_inviter 10
 ref_bonus_invited 10
+stars_buy_hint_enabled 1
+stars_buy_url https://t.me/BuyStarsBot
+offer_url https://example.com/offer
+policy_url https://example.com/policy
 ```

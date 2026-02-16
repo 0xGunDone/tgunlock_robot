@@ -17,6 +17,7 @@ from bot.services.proxy_provider import MockProxyProvider, CommandProxyProvider,
 from bot.services.billing import run_billing_once
 from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user
 from bot.ui import send_bg_to_user
+from bot.services.settings import get_int_setting
 from bot.keyboards import main_menu_inline_kb
 from bot.services.freekassa import verify_notification, amount_matches
 from fastapi.responses import PlainTextResponse
@@ -73,6 +74,25 @@ HEALTH_PATH = f"{APP_PREFIX}/health" if APP_PREFIX else "/health"
 FREEKASSA_PATH = f"{APP_PREFIX}/freekassa" if APP_PREFIX else "/freekassa"
 
 app = FastAPI()
+
+FREEKASSA_FEE_PERCENT = 12.5
+
+
+async def _build_user_header(db, user_row) -> str:
+    if not user_row:
+        return "Баланс: 0 ₽ | Активных прокси: 0\nСтоимость/день: 0 ₽ | Хватит: —"
+    active = await dao.count_active_proxies(db, user_id=user_row["id"])
+    day_price = await get_int_setting(db, "proxy_day_price", 0)
+    daily_cost = max(day_price, 0) * active
+    if daily_cost > 0:
+        days_left = int(user_row["balance"]) // daily_cost
+        days_str = f"{days_left} д."
+    else:
+        days_str = "∞" if active > 0 and day_price == 0 else "—"
+    return (
+        f"Баланс: {user_row['balance']} ₽ | Активных прокси: {active}\n"
+        f"Стоимость/день: {daily_cost} ₽ | Хватит: {days_str}"
+    )
 
 
 @app.on_event("startup")
@@ -176,7 +196,7 @@ async def freekassa_webhook(request: Request) -> Response:
             return PlainTextResponse("NO", status_code=404)
         if payment["status"] == "paid":
             return PlainTextResponse("YES")
-        if not amount_matches(payment["amount"], amount):
+        if not amount_matches(payment["amount"], amount, FREEKASSA_FEE_PERCENT):
             await dao.update_payment_status(
                 db, payment_id, "failed", provider_payment_id=f"freekassa:{payment_id}"
             )
@@ -192,8 +212,7 @@ async def freekassa_webhook(request: Request) -> Response:
 
         user = await dao.get_user_by_id(db, payment["user_id"])
         if user:
-            active = await dao.count_active_proxies(db, user_id=user["id"])
-            header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+            header = await _build_user_header(db, user)
             text = (
                 f"{header}\n\nБаланс пополнен на {payment['amount']} ₽.\nПрокси снова активны."
                 if reenabled
@@ -286,8 +305,7 @@ async def _notify_disabled_proxies(bot: Bot, db, disabled_map: dict[int, list]) 
         user = await dao.get_user_by_id(db, user_id)
         if not user or user["blocked_at"] or user["deleted_at"]:
             continue
-        active = await dao.count_active_proxies(db, user_id=user_id)
-        header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+        header = await _build_user_header(db, user)
         lines = [header, "", "Прокси отключены из-за нехватки средств."]
         names = [p["login"] for p in proxies]
         if names:
@@ -304,8 +322,7 @@ async def _notify_low_balance(bot: Bot, db, warnings: dict[int, dict]) -> None:
         user = await dao.get_user_by_id(db, user_id)
         if not user or user["blocked_at"] or user["deleted_at"]:
             continue
-        active = await dao.count_active_proxies(db, user_id=user_id)
-        header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+        header = await _build_user_header(db, user)
         text = (
             f"{header}\n\n"
             "⚠️ Баланс может не хватить на следующий день.\n"

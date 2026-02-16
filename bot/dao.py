@@ -344,6 +344,59 @@ async def set_setting(db: aiosqlite.Connection, key: str, value: str) -> None:
     await db.commit()
 
 
+async def get_open_support_ticket_by_user(
+    db: aiosqlite.Connection, user_id: int
+) -> Optional[aiosqlite.Row]:
+    cur = await db.execute(
+        "SELECT * FROM support_tickets WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1",
+        (user_id,),
+    )
+    return await cur.fetchone()
+
+
+async def get_support_ticket(db: aiosqlite.Connection, ticket_id: int) -> Optional[aiosqlite.Row]:
+    cur = await db.execute("SELECT * FROM support_tickets WHERE id = ?", (ticket_id,))
+    return await cur.fetchone()
+
+
+async def create_support_ticket(db: aiosqlite.Connection, user_id: int) -> int:
+    now = now_iso()
+    cur = await db.execute(
+        "INSERT INTO support_tickets(user_id, status, created_at, updated_at) VALUES(?, 'open', ?, ?)",
+        (user_id, now, now),
+    )
+    await db.commit()
+    return int(cur.lastrowid)
+
+
+async def set_support_ticket_status(db: aiosqlite.Connection, ticket_id: int, status: str) -> None:
+    await db.execute(
+        "UPDATE support_tickets SET status = ?, updated_at = ? WHERE id = ?",
+        (status, now_iso(), ticket_id),
+    )
+    await db.commit()
+
+
+async def add_support_message(
+    db: aiosqlite.Connection,
+    ticket_id: int,
+    sender_role: str,
+    sender_id: int,
+    message: str,
+) -> None:
+    now = now_iso()
+    await db.execute(
+        "INSERT INTO support_messages(ticket_id, sender_role, sender_id, message, created_at) "
+        "VALUES(?, ?, ?, ?, ?)",
+        (ticket_id, sender_role, sender_id, message, now),
+    )
+    await db.execute(
+        "UPDATE support_tickets SET updated_at = ? WHERE id = ?",
+        (now, ticket_id),
+    )
+    await db.commit()
+
+
 async def insert_processed_update(db: aiosqlite.Connection, update_id: int) -> bool:
     cur = await db.execute(
         "INSERT OR IGNORE INTO processed_updates(update_id, created_at) VALUES(?, ?)",

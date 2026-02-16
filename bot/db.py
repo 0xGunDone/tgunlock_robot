@@ -24,6 +24,10 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "max_active_proxies": "10",
     "referral_enabled": "1",
     "bg_enabled": "1",
+    "offer_enabled": "1",
+    "policy_enabled": "1",
+    "offer_url": "",
+    "policy_url": "",
 }
 
 
@@ -109,6 +113,25 @@ async def init_db(db: aiosqlite.Connection) -> None:
             FOREIGN KEY(invited_user_id) REFERENCES users(id)
         );
 
+        CREATE TABLE IF NOT EXISTS support_tickets (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id INTEGER PRIMARY KEY,
+            ticket_id INTEGER NOT NULL,
+            sender_role TEXT NOT NULL,
+            sender_id INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(ticket_id) REFERENCES support_tickets(id)
+        );
+
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -127,6 +150,9 @@ async def init_db(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_referral_events_inviter ON referral_events(inviter_user_id);
         CREATE INDEX IF NOT EXISTS idx_referral_events_invited ON referral_events(invited_user_id);
         CREATE INDEX IF NOT EXISTS idx_referral_links_code ON referral_links(code);
+        CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id);
+        CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);
+        CREATE INDEX IF NOT EXISTS idx_support_messages_ticket ON support_messages(ticket_id);
         """
     )
     await db.commit()

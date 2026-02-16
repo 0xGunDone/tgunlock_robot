@@ -37,6 +37,9 @@ def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         ],
         [
             _btn("🔍 Проверить", callback_data="menu:check", style=STYLE_PRIMARY),
+            _btn("💬 Поддержка", callback_data="menu:support", style=STYLE_PRIMARY),
+        ],
+        [
             _btn("❓ Помощь", callback_data="menu:help", style=STYLE_PRIMARY),
         ],
     ]
@@ -48,6 +51,29 @@ def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
 def back_main_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)]]
+    )
+
+
+def support_cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[_btn("❌ Отмена", callback_data="menu:main", style=STYLE_DANGER)]]
+    )
+
+
+def support_admin_reply_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[_btn("❌ Отмена", callback_data="support:reply_cancel", style=STYLE_DANGER)]]
+    )
+
+
+def support_admin_ticket_kb(ticket_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _btn("Ответить", callback_data=f"support:reply:{ticket_id}", style=STYLE_SUCCESS),
+                _btn("Закрыть", callback_data=f"support:close:{ticket_id}", style=STYLE_DANGER),
+            ]
+        ]
     )
 
 
@@ -215,6 +241,30 @@ def admin_settings_kb(settings: dict[str, str]) -> InlineKeyboardMarkup:
             _btn(
                 "Сменить фон",
                 callback_data="admin_settings_edit:bg_image",
+                style=STYLE_PRIMARY,
+            ),
+        ],
+        [
+            _btn(
+                f"Оферта: {_bool_label(val('offer_enabled', '1'))}",
+                callback_data="admin_settings_toggle:offer_enabled",
+                style=toggle_style("offer_enabled", "1"),
+            ),
+            _btn(
+                f"Политика: {_bool_label(val('policy_enabled', '1'))}",
+                callback_data="admin_settings_toggle:policy_enabled",
+                style=toggle_style("policy_enabled", "1"),
+            ),
+        ],
+        [
+            _btn(
+                "URL оферты",
+                callback_data="admin_settings_edit:offer_url",
+                style=STYLE_PRIMARY,
+            ),
+            _btn(
+                "URL политики",
+                callback_data="admin_settings_edit:policy_url",
                 style=STYLE_PRIMARY,
             ),
         ],

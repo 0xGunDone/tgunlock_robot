@@ -142,25 +142,40 @@ async def get_currencies(api_base: str, api_key: str, shop_id: str) -> Dict[str,
 
 
 def verify_notification(data: dict[str, str], shop_id: str, secret_word_2: str) -> bool:
-    merchant_id = data.get("MERCHANT_ID") or data.get("merchant_id") or ""
+    merchant_id = data.get("MERCHANT_ID") or data.get("merchant_id") or data.get("shopId") or ""
     amount = data.get("AMOUNT") or data.get("amount") or ""
-    order_id = data.get("MERCHANT_ORDER_ID") or data.get("merchant_order_id") or ""
-    sign = (data.get("SIGN") or data.get("sign") or "").lower()
+    order_id = data.get("MERCHANT_ORDER_ID") or data.get("merchant_order_id") or data.get("orderId") or ""
+    intid = data.get("intid") or data.get("INTID") or data.get("paymentId") or ""
+    sign = (data.get("SIGN") or data.get("sign") or data.get("signature") or "").lower()
 
-    if not (merchant_id and amount and order_id and sign):
+    if not (merchant_id and amount and sign):
         return False
-    if merchant_id != shop_id:
+    if str(merchant_id) != str(shop_id):
         return False
 
-    sign_string = f"{merchant_id}:{amount}:{secret_word_2}:{order_id}"
-    expected = hashlib.md5(sign_string.encode("utf-8")).hexdigest().lower()
-    return expected == sign
+    candidates = []
+    if order_id:
+        candidates.append(f"{merchant_id}:{amount}:{secret_word_2}:{order_id}")
+    if intid:
+        candidates.append(f"{merchant_id}|{amount}|{intid}|{secret_word_2}")
+
+    for sign_string in candidates:
+        expected = hashlib.md5(sign_string.encode("utf-8")).hexdigest().lower()
+        if expected == sign:
+            return True
+    return False
 
 
-def amount_matches(expected_rub: int, amount_str: str) -> bool:
+def amount_matches(expected_rub: int, amount_str: str, fee_percent: float | None = None) -> bool:
     try:
         got = Decimal(amount_str)
         want = Decimal(str(expected_rub))
-        return got.quantize(Decimal("0.01")) == want.quantize(Decimal("0.01"))
+        if got.quantize(Decimal("0.01")) == want.quantize(Decimal("0.01")):
+            return True
+        if fee_percent is None:
+            return False
+        fee = (want * Decimal(str(fee_percent)) / Decimal("100")).quantize(Decimal("0.01"))
+        total = (want + fee).quantize(Decimal("0.01"))
+        return got.quantize(Decimal("0.01")) == total
     except (InvalidOperation, ValueError):
         return False

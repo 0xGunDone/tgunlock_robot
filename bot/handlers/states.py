@@ -5,6 +5,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class UserStates(StatesGroup):
     waiting_topup_amount = State()
+    waiting_support_message = State()
 
 
 class AdminStates(StatesGroup):
@@ -17,3 +18,4 @@ class AdminStates(StatesGroup):
     ref_code = State()
     ref_bonuses = State()
     waiting_bg_image = State()
+    waiting_support_reply = State()

@@ -18,6 +18,7 @@ from bot.db import get_db
 from bot.handlers.states import AdminStates
 from bot.keyboards import (
     admin_menu_inline_kb,
+    main_menu_inline_kb,
     broadcast_filters_kb,
     admin_user_actions_kb,
     admin_settings_kb,
@@ -29,12 +30,14 @@ from bot.keyboards import (
     admin_users_kb,
     admin_users_list_kb,
     admin_export_kb,
+    support_admin_reply_kb,
     admin_user_proxies_kb,
 )
 from bot.runtime import runtime
-from bot.ui import send_or_edit_bg_message
+from bot.ui import send_or_edit_bg_message, send_bg_to_user
 from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user
 from bot.services.freekassa import get_currencies
+from bot.services.settings import get_int_setting
 
 router = Router()
 
@@ -102,11 +105,15 @@ def _settings_text(settings_map: dict[str, str]) -> str:
         f"Stars: {onoff('stars_enabled', '1')}",
         f"FreeKassa: {onoff('freekassa_enabled', '0')}",
         f"Фон: {onoff('bg_enabled', '1')}",
+        f"Оферта: {onoff('offer_enabled', '1')}",
+        f"Политика: {onoff('policy_enabled', '1')}",
         f"FK СБП: {onoff('freekassa_method_44_enabled', '1')}",
         f"FK Карта: {onoff('freekassa_method_36_enabled', '1')}",
         f"FK SberPay: {onoff('freekassa_method_43_enabled', '1')}",
         f"Подсказка Stars: {onoff('stars_buy_hint_enabled', '0')}",
         f"URL Stars: {val('stars_buy_url', '') or '—'}",
+        f"URL Оферта: {val('offer_url', '') or '—'}",
+        f"URL Политика: {val('policy_url', '') or '—'}",
         f"Рефералка: {onoff('referral_enabled', '1')}",
         f"Бонус пригл.: {val('ref_bonus_inviter', '0')} ₽",
         f"Бонус приглаш.: {val('ref_bonus_invited', '0')} ₽",
@@ -122,6 +129,23 @@ def _pick_val(item: dict, *keys: str, default: str = "—") -> str:
         if key in item and item[key] not in (None, ""):
             return str(item[key])
     return default
+
+
+async def _user_header(db, user_row) -> str:
+    if not user_row:
+        return "Баланс: 0 ₽"
+    active = await dao.count_active_proxies(db, user_id=user_row["id"])
+    day_price = await get_int_setting(db, "proxy_day_price", 0)
+    daily_cost = max(day_price, 0) * active
+    if daily_cost > 0:
+        days_left = int(user_row["balance"]) // daily_cost
+        days_str = f"{days_left} д."
+    else:
+        days_str = "∞" if active > 0 and day_price == 0 else "—"
+    return (
+        f"Баланс: {user_row['balance']} ₽ | Активных прокси: {active}\n"
+        f"Стоимость/день: {daily_cost} ₽ | Хватит: {days_str}"
+    )
 
 
 async def _freekassa_status_text(db) -> str:
@@ -513,10 +537,13 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
                     try:
                         user_row = await dao.get_user_by_id(db, user_id)
                         if user_row:
-                            await message.bot.send_message(
-                                user_row["tg_id"],
-                                "Баланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
-                                disable_notification=True,
+                            header = await _user_header(db, user_row)
+                            await send_bg_to_user(
+                                message.bot,
+                                db,
+                                user_row,
+                                f"{header}\n\nБаланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
+                                reply_markup=main_menu_inline_kb(_is_admin(user_row["tg_id"])),
                             )
                     except Exception:
                         pass
@@ -584,10 +611,13 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
                     try:
                         user = await dao.get_user_by_id(db, user_id)
                         if user:
-                            await call.bot.send_message(
-                                user["tg_id"],
-                                "Баланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
-                                disable_notification=True,
+                            header = await _user_header(db, user)
+                            await send_bg_to_user(
+                                call.message.bot,
+                                db,
+                                user,
+                                f"{header}\n\nБаланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
+                                reply_markup=main_menu_inline_kb(_is_admin(user[\"tg_id\"])),
                             )
                     except Exception:
                         pass
@@ -708,10 +738,13 @@ async def admin_user_custom_delta(message: Message, state: FSMContext) -> None:
                 try:
                     user = await dao.get_user_by_id(db, user_id)
                     if user:
-                        await message.bot.send_message(
-                            user["tg_id"],
-                            "Баланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
-                            disable_notification=True,
+                        header = await _user_header(db, user)
+                        await send_bg_to_user(
+                            message.bot,
+                            db,
+                            user,
+                            f"{header}\n\nБаланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
+                            reply_markup=main_menu_inline_kb(_is_admin(user[\"tg_id\"])),
                         )
                 except Exception:
                     pass
@@ -1032,6 +1065,118 @@ async def admin_settings_toggle(call: CallbackQuery, state: FSMContext) -> None:
         await db.close()
 
 
+@router.callback_query(F.data.startswith("support:reply:"))
+async def admin_support_reply_pick(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return
+    ticket_id = int(parts[2])
+    await state.update_data(support_ticket_id=ticket_id)
+    await state.set_state(AdminStates.waiting_support_reply)
+    await _safe_edit(call, f"Введите ответ для тикета #{ticket_id}:", reply_markup=support_admin_reply_kb())
+
+
+@router.callback_query(F.data.startswith("support:close:"))
+async def admin_support_close(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return
+    ticket_id = int(parts[2])
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        ticket = await dao.get_support_ticket(db, ticket_id)
+        if not ticket:
+            await _safe_edit(call, "Тикет не найден.")
+            return
+        await dao.set_support_ticket_status(db, ticket_id, "closed")
+        user = await dao.get_user_by_id(db, ticket["user_id"])
+        if user:
+            header = await _user_header(db, user)
+            await send_bg_to_user(
+                call.message.bot,
+                db,
+                user,
+                f"{header}\n\nВаш тикет #{ticket_id} закрыт. Если нужно — напишите снова.",
+                reply_markup=main_menu_inline_kb(_is_admin(user["tg_id"])),
+            )
+        for admin_id in (runtime.config.admin_tg_ids if runtime.config else []):
+            try:
+                await call.message.bot.send_message(admin_id, f"Тикет #{ticket_id} закрыт.")
+            except Exception:
+                pass
+        await _safe_edit(call, f"Тикет #{ticket_id} закрыт.")
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data == "support:reply_cancel")
+async def admin_support_reply_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    await state.clear()
+    await _safe_edit(call, "Отменено.", reply_markup=admin_menu_inline_kb())
+
+
+@router.message(AdminStates.waiting_support_reply)
+async def admin_support_reply_send(message: Message, state: FSMContext) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if not text:
+        await _admin_send_or_edit(message, "Ответ должен быть текстом.", reply_markup=support_admin_reply_kb())
+        return
+    data = await state.get_data()
+    ticket_id = data.get("support_ticket_id")
+    if not ticket_id:
+        await _admin_send_or_edit(message, "Тикет не найден.")
+        await state.clear()
+        return
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        ticket = await dao.get_support_ticket(db, int(ticket_id))
+        if not ticket:
+            await _admin_send_or_edit(message, "Тикет не найден.")
+            await state.clear()
+            return
+        await dao.add_support_message(db, int(ticket_id), "admin", message.from_user.id, text)
+        if ticket["status"] != "open":
+            await dao.set_support_ticket_status(db, int(ticket_id), "open")
+        user = await dao.get_user_by_id(db, ticket["user_id"])
+        if user:
+            header = await _user_header(db, user)
+            await send_bg_to_user(
+                message.bot,
+                db,
+                user,
+                f"{header}\n\nОтвет поддержки:\n{text}",
+                reply_markup=main_menu_inline_kb(_is_admin(user["tg_id"])),
+            )
+        admin_tag = f"@{message.from_user.username}" if message.from_user.username else str(message.from_user.id)
+        notify_text = f"Ответ по тикету #{ticket_id} от {admin_tag}:\n{text}"
+        for admin_id in (runtime.config.admin_tg_ids if runtime.config else []):
+            try:
+                await message.bot.send_message(admin_id, notify_text)
+            except Exception:
+                pass
+        await _admin_send_or_edit(message, "Ответ отправлен.")
+        await state.clear()
+    finally:
+        await db.close()
+
+
 @router.callback_query(F.data == "admin:export")
 async def admin_export(call: CallbackQuery) -> None:
     if not _is_admin(call.from_user.id):
@@ -1180,7 +1325,7 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
 
     db = await get_db(config.db_path)
     try:
-        query = "SELECT tg_id FROM users WHERE deleted_at IS NULL"
+        query = "SELECT * FROM users WHERE deleted_at IS NULL"
         params = []
 
         if action == "active7":
@@ -1189,7 +1334,7 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
             params.append(since)
         elif action == "active_proxies":
             query = (
-                "SELECT DISTINCT u.tg_id FROM users u "
+                "SELECT DISTINCT u.* FROM users u "
                 "JOIN proxies p ON p.user_id = u.id "
                 "WHERE u.deleted_at IS NULL AND p.status = 'active'"
             )
@@ -1198,16 +1343,22 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
 
         cur = await db.execute(query, params)
         rows = await cur.fetchall()
-        tg_ids = [row["tg_id"] for row in rows]
 
-        await _safe_edit(call, f"Начинаю рассылку. Получателей: {len(tg_ids)}")
+        await _safe_edit(call, f"Начинаю рассылку. Получателей: {len(rows)}")
         delay = config.broadcast_delay_ms / 1000.0
 
         sent = 0
         failed = 0
-        for tg_id in tg_ids:
+        for row in rows:
             try:
-                await call.message.bot.send_message(tg_id, text)
+                is_admin = row["tg_id"] in (runtime.config.admin_tg_ids if runtime.config else [])
+                await send_bg_to_user(
+                    call.message.bot,
+                    db,
+                    row,
+                    text,
+                    reply_markup=main_menu_inline_kb(is_admin),
+                )
                 sent += 1
             except Exception:
                 failed += 1

@@ -22,6 +22,8 @@ from bot.keyboards import (
     freekassa_method_kb,
     freekassa_amount_kb,
     back_main_kb,
+    support_cancel_kb,
+    support_admin_ticket_kb,
     help_kb,
     help_detail_kb,
 )
@@ -345,11 +347,12 @@ async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int, metho
         status="pending",
         payload=f"freekassa:{user_id}:{rub}",
     )
+    total_amount = rub * (1 + FREEKASSA_FEE_PERCENT / 100)
     result = await create_order(
         api_base=config.freekassa_api_base,
         api_key=config.freekassa_api_key,
         shop_id=config.freekassa_shop_id,
-        amount_rub=rub,
+        amount_rub=total_amount,
         method=method,
         email=email,
         ip=ip,
@@ -378,6 +381,19 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
     db = await get_db(config.db_path)
     try:
+        offer_enabled = await get_bool_setting(db, "offer_enabled", True)
+        policy_enabled = await get_bool_setting(db, "policy_enabled", True)
+        offer_url = await dao.get_setting(db, "offer_url", "") or ""
+        policy_url = await dao.get_setting(db, "policy_url", "") or ""
+        docs_lines = []
+        if offer_enabled and offer_url:
+            safe_offer = html_escape(offer_url, quote=True)
+            docs_lines.append(f"📋 <a href=\"{safe_offer}\">Публичная оферта</a>")
+        if policy_enabled and policy_url:
+            safe_policy = html_escape(policy_url, quote=True)
+            docs_lines.append(f"📋 <a href=\"{safe_policy}\">Политика конфиденциальности</a>")
+        docs_text = ("\n\n" + "\n".join(docs_lines)) if docs_lines else ""
+
         user = await dao.get_user_by_tg_id_any(db, message.from_user.id)
         if user and user["deleted_at"]:
             await dao.delete_user(db, user["id"])
@@ -395,15 +411,16 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             await db.commit()
             await dao.update_user_last_seen(db, message.from_user.id)
             user_row, header = await _get_user_and_header(db, message.from_user.id)
-            text = f"{header}\n\nГлавное меню" if header else "Главное меню"
-            await _send_or_edit_main_message(
-                message,
-                db,
-                text,
-                reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
-                force_new=True,
-            )
-            return
+        text = f"{header}\n\nГлавное меню" if header else "Главное меню"
+        text += docs_text
+        await _send_or_edit_main_message(
+            message,
+            db,
+            text,
+            reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+            parse_mode="HTML" if docs_text else None,
+        )
+        return
 
         ref_arg = extract_ref_code(_get_start_args(message))
         free_credit = await get_int_setting(db, "free_credit", 0)
@@ -436,8 +453,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 f"{links_text}\n\n"
                 "Нажмите на ссылку — Telegram сам добавит прокси.\n"
                 "Включайте/выключайте в настройках Telegram.\n"
-                "Если ссылка не открывается — введите host/port/secret вручную.",
+                "Если ссылка не открывается — введите host/port/secret вручную."
+                + docs_text,
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+                parse_mode="HTML",
             )
         except Exception:
             await _send_or_edit_main_message(
@@ -516,6 +535,28 @@ async def menu_help(call: CallbackQuery) -> None:
         await db.close()
 
 
+@router.callback_query(F.data == "menu:support")
+async def menu_support(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        user, header = await _get_user_and_header(db, call.from_user.id)
+        if not user:
+            await _safe_edit(call, "Нажмите /start")
+            return
+        await state.set_state(UserStates.waiting_support_message)
+        await _safe_edit(
+            call,
+            f"{header}\n\nОпишите проблему одним сообщением — мы ответим.",
+            reply_markup=support_cancel_kb(),
+        )
+    finally:
+        await db.close()
+
+
 @router.callback_query(F.data.startswith("help:"))
 async def help_detail(call: CallbackQuery) -> None:
     await call.answer()
@@ -579,8 +620,7 @@ async def menu_check(call: CallbackQuery) -> None:
             await _safe_edit(call, "Нажмите /start")
             return
         proxies = await dao.list_proxies_by_user(db, user["id"])
-        active = await dao.count_active_proxies(db, user_id=user["id"])
-        header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+        _, header = await _get_user_and_header(db, call.from_user.id)
         if not proxies:
             await _safe_edit(call, f"{header}\n\nУ вас нет прокси.")
             return
@@ -617,15 +657,14 @@ async def my_proxies(call: CallbackQuery) -> None:
             return
         proxies = await dao.list_proxies_by_user(db, user["id"])
         if not proxies:
-            header = f"Баланс: {user['balance']} ₽ | Активных прокси: 0"
+            _, header = await _get_user_and_header(db, call.from_user.id)
             await _safe_edit(call, f"{header}\n\nУ вас пока нет прокси.", reply_markup=proxies_empty_kb())
             return
 
         proxy_dicts = [
             {"id": p["id"], "login": p["login"]} for p in proxies
         ]
-        active = await dao.count_active_proxies(db, user_id=user["id"])
-        header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+        _, header = await _get_user_and_header(db, call.from_user.id)
         lines = [f"{header}", "", "Ваши прокси:", "Нажмите на имя, чтобы получить ссылку."]
         for idx, p in enumerate(proxies, 1):
             lines.append(f"{idx}. {p['login']}")
@@ -671,8 +710,7 @@ async def proxy_buy_cb(call: CallbackQuery) -> None:
         proxy = await _create_proxy_for_user(db, user["id"], is_free=0)
         await sync_mtproto_secrets(db)
         links_text = await _build_proxy_links_text(db, proxy)
-        active = await dao.count_active_proxies(db, user_id=user["id"])
-        header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+        _, header = await _get_user_and_header(db, call.from_user.id)
         await _safe_edit(
             call,
             f"{header}\n\n"
@@ -698,9 +736,7 @@ async def proxy_show(call: CallbackQuery) -> None:
             return
         links_text = await _build_proxy_links_text(db, proxy)
         user = await dao.get_user_by_id(db, proxy["user_id"])
-        active = await dao.count_active_proxies(db, user_id=proxy["user_id"]) if user else 0
-        balance = user["balance"] if user else 0
-        header = f"Баланс: {balance} ₽ | Активных прокси: {active}"
+        _, header = await _get_user_and_header(db, user["tg_id"]) if user else (None, "Баланс: 0 ₽")
         await _safe_edit(
             call,
             f"{header}\n\n"
@@ -769,8 +805,7 @@ async def referral_info(call: CallbackQuery) -> None:
         if not user:
             await _safe_edit(call, "Нажмите /start", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
             return
-        active = await dao.count_active_proxies(db, user_id=user["id"])
-        header = f"Баланс: {user['balance']} ₽ | Активных прокси: {active}"
+        _, header = await _get_user_and_header(db, call.from_user.id)
         await _safe_edit(
             call,
             f"{header}\n\n"
@@ -1299,6 +1334,70 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
         await db.close()
 
 
+@router.message(UserStates.waiting_support_message)
+async def support_message(message: Message, state: FSMContext) -> None:
+    config = runtime.config
+    if config is None:
+        return
+    text = (message.text or "").strip()
+    if not text:
+        db = await get_db(config.db_path)
+        try:
+            await _send_or_edit_main_message(
+                message,
+                db,
+                "Напишите текстом, пожалуйста.",
+                reply_markup=support_cancel_kb(),
+            )
+        finally:
+            await db.close()
+        return
+
+    db = await get_db(config.db_path)
+    try:
+        user = await dao.get_user_by_tg_id(db, message.from_user.id)
+        if not user:
+            await _send_or_edit_main_message(message, db, "Нажмите /start")
+            return
+
+        ticket = await dao.get_open_support_ticket_by_user(db, user["id"])
+        if ticket:
+            ticket_id = ticket["id"]
+        else:
+            ticket_id = await dao.create_support_ticket(db, user["id"])
+
+        await dao.add_support_message(db, ticket_id, "user", message.from_user.id, text)
+
+        # notify admins
+        admin_ids = runtime.config.admin_tg_ids if runtime.config else []
+        user_tag = f"@{message.from_user.username}" if message.from_user.username else "—"
+        admin_text = (
+            f"🆕 Поддержка #{ticket_id}\n"
+            f"От: {user_tag} (tg_id: {message.from_user.id})\n\n"
+            f"{text}"
+        )
+        for admin_id in admin_ids:
+            try:
+                await message.bot.send_message(
+                    admin_id,
+                    admin_text,
+                    reply_markup=support_admin_ticket_kb(ticket_id),
+                )
+            except Exception:
+                pass
+
+        user_row, header = await _get_user_and_header(db, message.from_user.id)
+        await _send_or_edit_main_message(
+            message,
+            db,
+            f"{header}\n\nСообщение отправлено в поддержку. Мы ответим здесь.",
+            reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+        )
+        await state.clear()
+    finally:
+        await db.close()
+
+
 @router.callback_query(F.data.startswith("fk:cancel:"))
 async def freekassa_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
@@ -1376,9 +1475,7 @@ async def successful_payment(message: Message) -> None:
         await dao.add_user_balance(db, user_id, rub)
         reenabled = await reenable_proxies_for_user(db, user_id)
         user = await dao.get_user_by_id(db, user_id)
-        active = await dao.count_active_proxies(db, user_id=user_id) if user else 0
-        balance = user["balance"] if user else 0
-        header = f"Баланс: {balance} ₽ | Активных прокси: {active}"
+        _, header = await _get_user_and_header(db, user["tg_id"]) if user else (None, "Баланс: 0 ₽")
         if reenabled:
             await _send_or_edit_main_message(
                 message,
