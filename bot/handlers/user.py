@@ -419,6 +419,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             text,
             reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
             parse_mode="HTML" if docs_text else None,
+            force_new=True,
         )
         return
 
