@@ -60,6 +60,31 @@ def support_cancel_kb() -> InlineKeyboardMarkup:
     )
 
 
+def support_user_kb(ticket_id: int | None = None) -> InlineKeyboardMarkup:
+    rows = []
+    if ticket_id:
+        rows.append(
+            [
+                _btn(
+                    "✅ Закрыть тикет",
+                    callback_data=f"support:close_user:{ticket_id}",
+                    style=STYLE_DANGER,
+                )
+            ]
+        )
+    rows.append([_btn("❌ Отмена", callback_data="menu:main", style=STYLE_DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def support_user_close_kb(ticket_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [_btn("✅ Закрыть тикет", callback_data=f"support:close_user:{ticket_id}", style=STYLE_DANGER)],
+            [_btn("⬅️ В главное меню", callback_data="menu:main", style=STYLE_DANGER)],
+        ]
+    )
+
+
 def support_admin_reply_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[_btn("❌ Отмена", callback_data="support:reply_cancel", style=STYLE_DANGER)]]

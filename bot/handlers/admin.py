@@ -34,6 +34,7 @@ from bot.keyboards import (
     admin_user_proxies_kb,
     admin_support_list_kb,
     support_admin_ticket_kb_ext,
+    support_user_close_kb,
 )
 from bot.runtime import runtime
 from bot.ui import send_or_edit_bg_message, send_bg_to_user
@@ -1248,10 +1249,9 @@ async def admin_support_reply_send(message: Message, state: FSMContext) -> None:
                 db,
                 user,
                 f"{header}\n\nОтвет поддержки:\n{text}",
-                reply_markup=main_menu_inline_kb(_is_admin(user["tg_id"])),
+                reply_markup=support_user_close_kb(ticket_id),
             )
-        admin_tag = f"@{message.from_user.username}" if message.from_user.username else str(message.from_user.id)
-        notify_text = f"Ответ по тикету #{ticket_id} от {admin_tag}:\n{text}"
+        notify_text = f"Ответ по тикету #{ticket_id}:\n{text}"
         for admin_id in (runtime.config.admin_tg_ids if runtime.config else []):
             try:
                 await message.bot.send_message(admin_id, notify_text)

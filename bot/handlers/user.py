@@ -23,6 +23,8 @@ from bot.keyboards import (
     freekassa_amount_kb,
     back_main_kb,
     support_cancel_kb,
+    support_user_kb,
+    support_user_close_kb,
     support_admin_ticket_kb,
     help_kb,
     help_detail_kb,
@@ -548,12 +550,20 @@ async def menu_support(call: CallbackQuery, state: FSMContext) -> None:
         if not user:
             await _safe_edit(call, "Нажмите /start")
             return
+        ticket = await dao.get_open_support_ticket_by_user(db, user["id"])
         await state.set_state(UserStates.waiting_support_message)
-        await _safe_edit(
-            call,
-            f"{header}\n\nОпишите проблему одним сообщением — мы ответим.",
-            reply_markup=support_cancel_kb(),
-        )
+        if ticket:
+            await _safe_edit(
+                call,
+                f"{header}\n\nУ вас открыт тикет #{ticket['id']}. Напишите сообщение или закройте тикет.",
+                reply_markup=support_user_kb(ticket["id"]),
+            )
+        else:
+            await _safe_edit(
+                call,
+                f"{header}\n\nОпишите проблему одним сообщением — мы ответим.",
+                reply_markup=support_cancel_kb(),
+            )
     finally:
         await db.close()
 
@@ -1393,6 +1403,38 @@ async def support_message(message: Message, state: FSMContext) -> None:
             db,
             f"{header}\n\nСообщение отправлено в поддержку. Мы ответим здесь.",
             reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+        )
+        await state.clear()
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data.startswith("support:close_user:"))
+async def support_close_user(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return
+    ticket_id = int(parts[2])
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        user = await dao.get_user_by_tg_id(db, call.from_user.id)
+        if not user:
+            await _safe_edit(call, "Нажмите /start")
+            return
+        ticket = await dao.get_support_ticket(db, ticket_id)
+        if not ticket or ticket["user_id"] != user["id"]:
+            await _safe_edit(call, "Тикет не найден.")
+            return
+        await dao.set_support_ticket_status(db, ticket_id, "closed")
+        _, header = await _get_user_and_header(db, call.from_user.id)
+        await _safe_edit(
+            call,
+            f"{header}\n\nТикет #{ticket_id} закрыт. Если нужно — напишите снова.",
+            reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
         )
         await state.clear()
     finally:
