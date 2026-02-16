@@ -32,6 +32,8 @@ from bot.keyboards import (
     admin_export_kb,
     support_admin_reply_kb,
     admin_user_proxies_kb,
+    admin_support_list_kb,
+    support_admin_ticket_kb_ext,
 )
 from bot.runtime import runtime
 from bot.ui import send_or_edit_bg_message, send_bg_to_user
@@ -129,6 +131,12 @@ def _pick_val(item: dict, *keys: str, default: str = "—") -> str:
         if key in item and item[key] not in (None, ""):
             return str(item[key])
     return default
+
+
+def _support_user_label(username: str | None, tg_id: int) -> str:
+    if username:
+        return f"@{username}"
+    return f"tg:{tg_id}"
 
 
 async def _user_header(db, user_row) -> str:
@@ -617,7 +625,7 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
                                 db,
                                 user,
                                 f"{header}\n\nБаланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
-                                reply_markup=main_menu_inline_kb(_is_admin(user[\"tg_id\"])),
+                                reply_markup=main_menu_inline_kb(_is_admin(user["tg_id"])),
                             )
                     except Exception:
                         pass
@@ -744,7 +752,7 @@ async def admin_user_custom_delta(message: Message, state: FSMContext) -> None:
                             db,
                             user,
                             f"{header}\n\nБаланс пополнен администратором. Прокси снова активны. Откройте «Мои прокси» для ссылок.",
-                            reply_markup=main_menu_inline_kb(_is_admin(user[\"tg_id\"])),
+                            reply_markup=main_menu_inline_kb(_is_admin(user["tg_id"])),
                         )
                 except Exception:
                     pass
@@ -850,6 +858,84 @@ async def admin_payments(call: CallbackQuery) -> None:
             call,
             "Последние платежи:\n" + "\n".join(lines),
             reply_markup=admin_menu_inline_kb(),
+        )
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data == "admin:support")
+async def admin_support_list(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    await state.clear()
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        tickets = await dao.list_support_tickets(db, status="open", limit=20)
+        if not tickets:
+            await _safe_edit(call, "Открытых тикетов нет.", reply_markup=admin_menu_inline_kb())
+            return
+        items = []
+        for t in tickets:
+            label = f"#{t['id']} {_support_user_label(t['username'], t['tg_id'])}"
+            items.append({"id": t["id"], "label": label})
+        await _safe_edit(
+            call,
+            f"Открытые тикеты: {len(tickets)}\nНажмите для просмотра.",
+            reply_markup=admin_support_list_kb(items),
+        )
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data.startswith("admin_support:open:"))
+async def admin_support_open(call: CallbackQuery, state: FSMContext) -> None:
+    if not _is_admin(call.from_user.id):
+        return
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return
+    ticket_id = int(parts[2])
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        ticket = await dao.get_support_ticket(db, ticket_id)
+        if not ticket:
+            await _safe_edit(call, "Тикет не найден.", reply_markup=admin_support_list_kb([]))
+            return
+        user = await dao.get_user_by_id(db, ticket["user_id"])
+        username = user["username"] if user else None
+        tg_id = user["tg_id"] if user else 0
+        status = ticket["status"]
+        messages = await dao.list_support_messages(db, ticket_id, limit=10)
+        lines = [
+            f"Тикет #{ticket_id} ({status})",
+            f"Пользователь: {_support_user_label(username, tg_id)} (tg_id: {tg_id})",
+            "",
+            "История:",
+        ]
+        if not messages:
+            lines.append("— сообщений нет —")
+        else:
+            for msg in messages:
+                role = "👤" if msg["sender_role"] == "user" else "🛠"
+                ts = (msg["created_at"] or "").replace("T", " ").replace("Z", "")
+                body = (msg["message"] or "").strip()
+                if len(body) > 200:
+                    body = body[:200] + "..."
+                lines.append(f"{role} {ts}: {body}")
+
+        text = "\n".join(lines)
+        await _safe_edit(
+            call,
+            text,
+            reply_markup=support_admin_ticket_kb_ext(ticket_id, show_back=True, show_refresh=True),
         )
     finally:
         await db.close()

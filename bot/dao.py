@@ -397,6 +397,36 @@ async def add_support_message(
     await db.commit()
 
 
+async def list_support_tickets(
+    db: aiosqlite.Connection, status: str | None = "open", limit: int = 20, offset: int = 0
+) -> List[aiosqlite.Row]:
+    query = (
+        "SELECT t.*, u.tg_id, u.username "
+        "FROM support_tickets t "
+        "JOIN users u ON u.id = t.user_id "
+    )
+    params: list[Any] = []
+    if status:
+        query += "WHERE t.status = ? "
+        params.append(status)
+    query += "ORDER BY t.updated_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    cur = await db.execute(query, params)
+    return await cur.fetchall()
+
+
+async def list_support_messages(
+    db: aiosqlite.Connection, ticket_id: int, limit: int = 20
+) -> List[aiosqlite.Row]:
+    cur = await db.execute(
+        "SELECT * FROM support_messages WHERE ticket_id = ? ORDER BY id DESC LIMIT ?",
+        (ticket_id, limit),
+    )
+    rows = await cur.fetchall()
+    rows.reverse()
+    return rows
+
+
 async def insert_processed_update(db: aiosqlite.Connection, update_id: int) -> bool:
     cur = await db.execute(
         "INSERT OR IGNORE INTO processed_updates(update_id, created_at) VALUES(?, ?)",

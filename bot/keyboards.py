@@ -67,14 +67,25 @@ def support_admin_reply_kb() -> InlineKeyboardMarkup:
 
 
 def support_admin_ticket_kb(ticket_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                _btn("Ответить", callback_data=f"support:reply:{ticket_id}", style=STYLE_SUCCESS),
-                _btn("Закрыть", callback_data=f"support:close:{ticket_id}", style=STYLE_DANGER),
-            ]
+    return support_admin_ticket_kb_ext(ticket_id)
+
+
+def support_admin_ticket_kb_ext(
+    ticket_id: int,
+    show_back: bool = False,
+    show_refresh: bool = False,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            _btn("Ответить", callback_data=f"support:reply:{ticket_id}", style=STYLE_SUCCESS),
+            _btn("Закрыть", callback_data=f"support:close:{ticket_id}", style=STYLE_DANGER),
         ]
-    )
+    ]
+    if show_refresh:
+        rows.append([_btn("🔄 Обновить", callback_data=f"admin_support:open:{ticket_id}", style=STYLE_PRIMARY)])
+    if show_back:
+        rows.append([_btn("⬅️ Назад", callback_data="admin:support", style=STYLE_DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_menu_inline_kb() -> InlineKeyboardMarkup:
@@ -92,7 +103,10 @@ def admin_menu_inline_kb() -> InlineKeyboardMarkup:
             _btn("⚙️ Настройки", callback_data="admin:settings", style=STYLE_PRIMARY),
         ],
         [
+            _btn("💬 Поддержка", callback_data="admin:support", style=STYLE_PRIMARY),
             _btn("📡 MTProxy", callback_data="admin:mtproxy", style=STYLE_PRIMARY),
+        ],
+        [
             _btn("💳 FreeKassa", callback_data="admin:freekassa", style=STYLE_PRIMARY),
         ],
         [
@@ -103,6 +117,15 @@ def admin_menu_inline_kb() -> InlineKeyboardMarkup:
             _btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER),
         ],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_support_list_kb(items: list[dict]) -> InlineKeyboardMarkup:
+    buttons = []
+    for item in items:
+        label = item.get("label") or f"#{item.get('id')}"
+        buttons.append([_btn(label, callback_data=f"admin_support:open:{item['id']}", style=STYLE_PRIMARY)])
+    buttons.append([_btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
