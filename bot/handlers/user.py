@@ -30,9 +30,10 @@ from bot.keyboards import (
     support_admin_ticket_kb,
     help_kb,
     help_detail_kb,
+    referral_share_kb,
 )
 from bot.runtime import runtime
-from bot.ui import send_or_edit_bg_message
+from bot.ui import send_or_edit_bg_message, get_bg_file
 from bot.services.settings import (
     get_int_setting,
     get_decimal_setting,
@@ -125,6 +126,13 @@ async def _send_bg_no_db(
         parse_mode=parse_mode,
         message_id=None,
     )
+
+
+async def _delete_user_input(message: Message) -> None:
+    try:
+        await message.bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    except Exception:
+        pass
 
 
 async def _get_user_and_header(db, tg_id: int) -> tuple[object | None, str | None]:
@@ -414,6 +422,7 @@ async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int, metho
 
 @router.message(CommandStart(), StateFilter("*"))
 async def cmd_start(message: Message, state: FSMContext) -> None:
+    await _delete_user_input(message)
     config = runtime.config
     if config is None:
         await _send_bg_no_db(message, "Бот не настроен.")
@@ -531,6 +540,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 @router.message(Command("menu"), StateFilter("*"))
 async def cmd_menu(message: Message, state: FSMContext) -> None:
+    await _delete_user_input(message)
     await state.clear()
     config = runtime.config
     if config is None:
@@ -573,6 +583,7 @@ async def menu_main(call: CallbackQuery) -> None:
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
+    await _delete_user_input(message)
     config = runtime.config
     if config is None:
         return
@@ -900,7 +911,7 @@ async def proxy_delete_apply(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "menu:referrals")
 async def referral_info(call: CallbackQuery) -> None:
-    await call.answer()
+    await call.answer("Карточка для пересылки отправлена")
     config = runtime.config
     if config is None:
         return
@@ -911,11 +922,32 @@ async def referral_info(call: CallbackQuery) -> None:
             await _safe_edit(call, "Нажмите /start", reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
             return
         _, header = await _get_user_and_header(db, call.from_user.id)
+        ref_url = f"https://t.me/{(await call.bot.get_me()).username}?start=ref_{user['ref_code']}"
+        text = (
+            "Подключить прокси для Telegram\n\n"
+            "Нажмите кнопку ниже и получите прокси автоматически.\n"
+            f"{ref_url}"
+        )
+        bg = get_bg_file()
+        if bg:
+            await call.message.bot.send_photo(
+                chat_id=call.from_user.id,
+                photo=bg,
+                caption=text,
+                reply_markup=referral_share_kb(ref_url),
+            )
+        else:
+            await call.message.bot.send_message(
+                chat_id=call.from_user.id,
+                text=text,
+                reply_markup=referral_share_kb(ref_url),
+                disable_web_page_preview=True,
+            )
+
         await _safe_edit(
             call,
-            f"{header}\n\n"
-            "Ваша реферальная ссылка:\n"
-            f"https://t.me/{(await call.bot.get_me()).username}?start=ref_{user['ref_code']}",
+            f"{header}\n\nРеферальная карточка отправлена отдельным сообщением.\n"
+            "Перешлите её другу.",
             reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
         )
     finally:
@@ -1445,6 +1477,7 @@ async def topup_days(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(UserStates.waiting_topup_amount)
 async def topup_amount(message: Message, state: FSMContext) -> None:
+    await _delete_user_input(message)
     config = runtime.config
     if config is None:
         return

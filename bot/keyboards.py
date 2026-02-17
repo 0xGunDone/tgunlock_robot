@@ -54,6 +54,14 @@ def back_main_kb() -> InlineKeyboardMarkup:
     )
 
 
+def referral_share_kb(ref_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [_btn("Подключить прокси для Telegram", url=ref_url, style=STYLE_SUCCESS)],
+        ]
+    )
+
+
 def support_cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[_btn("❌ Отмена", callback_data="menu:main", style=STYLE_DANGER)]]
