@@ -458,7 +458,12 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
         if user:
             if user["blocked_at"]:
-                await _send_or_edit_main_message(message, db, "Ваш аккаунт заблокирован.")
+                await _send_or_edit_main_message(
+                    message,
+                    db,
+                    "Ваш аккаунт заблокирован.",
+                    force_new=True,
+                )
                 return
             await db.execute(
                 "UPDATE users SET username = ? WHERE tg_id = ?",
@@ -475,6 +480,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 text,
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
                 parse_mode="HTML" if docs_text else None,
+                force_new=True,
             )
             return
 
@@ -509,6 +515,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 + docs_text,
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
                 parse_mode="HTML",
+                force_new=True,
             )
         except Exception:
             await _send_or_edit_main_message(
@@ -516,6 +523,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 db,
                 "Сервис временно недоступен. Попробуйте позже.",
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+                force_new=True,
             )
     finally:
         await db.close()
@@ -539,6 +547,7 @@ async def cmd_menu(message: Message, state: FSMContext) -> None:
             db,
             f"{header}\n\nГлавное меню",
             reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+            force_new=True,
         )
     finally:
         await db.close()
