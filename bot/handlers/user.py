@@ -994,17 +994,19 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
             hint = f"\n\nЗВЕЗДЫ МОЖНО КУПИТЬ <a href=\"{safe_url}\">ТУТ</a>"
         await state.clear()
         await state.set_state(UserStates.waiting_topup_amount)
-        rec_lines = []
         if daily_cost > 0:
-            for days in (7, 14, 30):
-                need = max(daily_cost * days - int(user["balance"]), 0)
-                rec_lines.append(f"На {days} д.: {need} ₽")
-            rec_block = "Рекомендации:\n" + "\n".join(rec_lines)
+            topup_text = (
+                f"{header}\n\n"
+                "Выберите срок или введите сумму пополнения в рублях."
+            )
         else:
-            rec_block = "Рекомендации недоступны: нет активных прокси или цена/день = 0."
+            topup_text = (
+                f"{header}\n\n"
+                "Введите сумму пополнения в рублях."
+            )
         await _safe_edit(
             call,
-            f"{header}\n\n{rec_block}\n\nВыберите срок или введите сумму пополнения в рублях.{hint}",
+            f"{topup_text}{hint}",
             parse_mode="HTML" if hint else None,
             reply_markup=topup_recommend_days_kb(),
         )
