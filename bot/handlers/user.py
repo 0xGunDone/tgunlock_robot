@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart, Command
+from aiogram.filters.state import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, LabeledPrice
 from html import escape as html_escape
@@ -411,7 +412,7 @@ async def _start_freekassa_payment(db, user_id: int, tg_id: int, rub: int, metho
 
 
 
-@router.message(CommandStart())
+@router.message(CommandStart(), StateFilter("*"))
 async def cmd_start(message: Message, state: FSMContext) -> None:
     config = runtime.config
     if config is None:
@@ -516,6 +517,29 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 "Сервис временно недоступен. Попробуйте позже.",
                 reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
             )
+    finally:
+        await db.close()
+
+
+@router.message(Command("menu"), StateFilter("*"))
+async def cmd_menu(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    config = runtime.config
+    if config is None:
+        await _send_bg_no_db(message, "Бот не настроен.")
+        return
+    db = await get_db(config.db_path)
+    try:
+        user, header = await _get_user_and_header(db, message.from_user.id)
+        if not user:
+            await _send_or_edit_main_message(message, db, "Нажмите /start")
+            return
+        await _send_or_edit_main_message(
+            message,
+            db,
+            f"{header}\n\nГлавное меню",
+            reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+        )
     finally:
         await db.close()
 
