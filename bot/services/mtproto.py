@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Iterable
 
 import aiosqlite
@@ -106,6 +107,7 @@ async def sync_mtproto_secrets(db: aiosqlite.Connection) -> None:
             with open(file_path, "w", encoding="utf-8") as fh:
                 fh.write("")
         await _control_mtproxy_service(config.mtproxy_service, action="stop")
+        runtime.mtproxy_restart_required = False
         return
 
     if current == secrets:
@@ -114,8 +116,30 @@ async def sync_mtproto_secrets(db: aiosqlite.Connection) -> None:
     with open(file_path, "w", encoding="utf-8") as fh:
         for secret in secrets:
             fh.write(secret + "\n")
-
+    now_ts = time.time()
+    last_restart = runtime.mtproxy_last_restart_ts or 0.0
+    cooldown = max(1, int(config.mtproxy_restart_cooldown_sec))
+    if now_ts - last_restart < cooldown:
+        runtime.mtproxy_restart_required = True
+        return
     await _control_mtproxy_service(config.mtproxy_service, action="restart")
+    runtime.mtproxy_last_restart_ts = now_ts
+    runtime.mtproxy_restart_required = False
+
+
+async def maybe_restart_mtproxy_service() -> bool:
+    config = runtime.config
+    if config is None or not runtime.mtproxy_restart_required:
+        return False
+    now_ts = time.time()
+    last_restart = runtime.mtproxy_last_restart_ts or 0.0
+    cooldown = max(1, int(config.mtproxy_restart_cooldown_sec))
+    if now_ts - last_restart < cooldown:
+        return False
+    await _control_mtproxy_service(config.mtproxy_service, action="restart")
+    runtime.mtproxy_last_restart_ts = now_ts
+    runtime.mtproxy_restart_required = False
+    return True
 
 
 async def _control_mtproxy_service(service_name: str | None, action: str) -> None:

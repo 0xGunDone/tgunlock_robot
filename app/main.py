@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timedelta
 from urllib.parse import parse_qs
 
 from aiogram import Bot, Dispatcher
@@ -15,11 +16,11 @@ from bot.handlers import routers
 from bot.runtime import runtime
 from bot.services.proxy_provider import MockProxyProvider, CommandProxyProvider, DantedPamProxyProvider
 from bot.services.billing import run_billing_once
-from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user
+from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user, maybe_restart_mtproxy_service
 from bot.ui import send_bg_to_user
 from bot.services.settings import get_int_setting
 from bot.keyboards import main_menu_inline_kb
-from bot.services.freekassa import verify_notification, amount_matches
+from bot.services.freekassa import verify_notification, amount_matches, get_order_status
 from fastapi.responses import PlainTextResponse
 
 config = load_config()
@@ -95,6 +96,64 @@ async def _build_user_header(db, user_row) -> str:
     )
 
 
+def _fk_paid(data: dict) -> bool:
+    if not data:
+        return False
+    candidates = [
+        data.get("status"),
+        (data.get("order") or {}).get("status") if isinstance(data.get("order"), dict) else None,
+        data.get("state"),
+        data.get("paymentStatus"),
+    ]
+    for raw in candidates:
+        if raw is None:
+            continue
+        value = str(raw).strip().lower()
+        if value in {"paid", "success", "successful", "completed", "confirm", "confirmed", "2"}:
+            return True
+    return False
+
+
+async def _credit_payment_and_notify(
+    db,
+    payment,
+    provider_payment_id: str,
+) -> None:
+    if payment["status"] == "paid":
+        return
+    await dao.update_payment_status(
+        db,
+        payment["id"],
+        "paid",
+        provider_payment_id=provider_payment_id,
+    )
+    await dao.add_user_balance(db, payment["user_id"], payment["amount"])
+    reenabled = await reenable_proxies_for_user(db, payment["user_id"])
+    if reenabled:
+        await sync_mtproto_secrets(db)
+
+    user = await dao.get_user_by_id(db, payment["user_id"])
+    if not user:
+        return
+    header = await _build_user_header(db, user)
+    text = (
+        f"{header}\n\nБаланс пополнен на {payment['amount']} ₽.\nПрокси снова активны."
+        if reenabled
+        else f"{header}\n\nБаланс пополнен на {payment['amount']} ₽."
+    )
+    try:
+        is_admin = user["tg_id"] in (runtime.config.admin_tg_ids if runtime.config else [])
+        await send_bg_to_user(
+            bot,
+            db,
+            user,
+            text,
+            reply_markup=main_menu_inline_kb(is_admin),
+        )
+    except Exception:
+        pass
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     db = await get_db(config.db_path)
@@ -114,6 +173,9 @@ async def on_startup() -> None:
     )
 
     asyncio.create_task(billing_loop())
+    asyncio.create_task(freekassa_reconcile_loop())
+    asyncio.create_task(mtproxy_watchdog_loop())
+    asyncio.create_task(support_sla_loop())
 
 
 @app.on_event("shutdown")
@@ -202,33 +264,7 @@ async def freekassa_webhook(request: Request) -> Response:
             )
             return PlainTextResponse("NO", status_code=400)
 
-        await dao.update_payment_status(
-            db, payment_id, "paid", provider_payment_id=f"freekassa:{payment_id}"
-        )
-        await dao.add_user_balance(db, payment["user_id"], payment["amount"])
-        reenabled = await reenable_proxies_for_user(db, payment["user_id"])
-        if reenabled:
-            await sync_mtproto_secrets(db)
-
-        user = await dao.get_user_by_id(db, payment["user_id"])
-        if user:
-            header = await _build_user_header(db, user)
-            text = (
-                f"{header}\n\nБаланс пополнен на {payment['amount']} ₽.\nПрокси снова активны."
-                if reenabled
-                else f"{header}\n\nБаланс пополнен на {payment['amount']} ₽."
-            )
-            try:
-                is_admin = user["tg_id"] in (runtime.config.admin_tg_ids if runtime.config else [])
-                await send_bg_to_user(
-                    bot,
-                    db,
-                    user,
-                    text,
-                    reply_markup=main_menu_inline_kb(is_admin),
-                )
-            except Exception:
-                pass
+        await _credit_payment_and_notify(db, payment, provider_payment_id=f"freekassa:{payment_id}")
     finally:
         await db.close()
     return PlainTextResponse("YES")
@@ -251,10 +287,66 @@ async def billing_loop() -> None:
                 await _notify_disabled_proxies(bot, db, result.disabled_by_balance)
             if result.low_balance_warnings:
                 await _notify_low_balance(bot, db, result.low_balance_warnings)
-            await _check_mtproxy_health(bot)
         finally:
             await db.close()
         await asyncio.sleep(config.billing_interval_sec)
+
+
+async def freekassa_reconcile_loop() -> None:
+    while True:
+        interval = max(30, int(config.freekassa_reconcile_interval_sec))
+        db = await get_db(config.db_path)
+        try:
+            await _reconcile_pending_freekassa(db)
+        finally:
+            await db.close()
+        await asyncio.sleep(interval)
+
+
+async def mtproxy_watchdog_loop() -> None:
+    while True:
+        try:
+            await maybe_restart_mtproxy_service()
+            await _check_mtproxy_health(bot)
+        except Exception:
+            pass
+        await asyncio.sleep(60)
+
+
+async def support_sla_loop() -> None:
+    while True:
+        db = await get_db(config.db_path)
+        try:
+            await _check_support_sla(db)
+        finally:
+            await db.close()
+        await asyncio.sleep(300)
+
+
+async def _reconcile_pending_freekassa(db) -> None:
+    if not (config.freekassa_shop_id and config.freekassa_api_key):
+        return
+    pending = await dao.list_pending_freekassa_payments(db, limit=100)
+    for payment in pending:
+        try:
+            data = await get_order_status(
+                api_base=config.freekassa_api_base,
+                api_key=config.freekassa_api_key,
+                shop_id=config.freekassa_shop_id,
+                payment_id=int(payment["id"]),
+            )
+            if data.get("error"):
+                continue
+            if not _fk_paid(data):
+                continue
+            await _credit_payment_and_notify(
+                db,
+                payment,
+                provider_payment_id=f"freekassa:{payment['id']}",
+            )
+        except Exception:
+            continue
+    runtime.last_freekassa_reconcile_ts = time.time()
 
 
 async def _check_mtproxy_health(bot: Bot) -> None:
@@ -296,8 +388,57 @@ async def _check_mtproxy_health(bot: Bot) -> None:
                     )
                 except Exception:
                     continue
+            last_restart = runtime.mtproxy_last_restart_ts or 0.0
+            cooldown = max(1, int(config.mtproxy_restart_cooldown_sec))
+            if now_ts - last_restart >= cooldown:
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "systemctl",
+                        "restart",
+                        service,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await proc.communicate()
+                    runtime.mtproxy_last_restart_ts = now_ts
+                except Exception:
+                    pass
     else:
         runtime.mtproxy_last_state = state
+
+
+async def _check_support_sla(db) -> None:
+    minutes = await get_int_setting(db, "support_sla_minutes", 30)
+    minutes = max(5, minutes)
+    threshold = (datetime.utcnow() - timedelta(minutes=minutes)).replace(microsecond=0).isoformat() + "Z"
+    now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    tickets = await dao.list_overdue_support_tickets(db, threshold)
+    for ticket in tickets:
+        last_alert = ticket["last_sla_alert_at"] or ""
+        if last_alert:
+            try:
+                last_dt = datetime.fromisoformat(last_alert.replace("Z", ""))
+                if datetime.utcnow() - last_dt < timedelta(hours=1):
+                    continue
+            except Exception:
+                pass
+        user_label = f"@{ticket['username']}" if ticket["username"] else f"tg:{ticket['tg_id']}"
+        text = (
+            f"SLA: тикет #{ticket['id']} без ответа {minutes}+ мин.\n"
+            f"Пользователь: {user_label}"
+        )
+        targets: list[int] = []
+        assigned = ticket["assigned_admin_tg_id"]
+        if assigned:
+            targets = [int(assigned)]
+        else:
+            targets = list(runtime.config.admin_tg_ids if runtime.config else [])
+        for admin_id in targets:
+            try:
+                await bot.send_message(admin_id, text, disable_notification=True)
+            except Exception:
+                continue
+        await dao.update_support_ticket_sla_alert_at(db, int(ticket["id"]), now_iso)
 
 
 async def _notify_disabled_proxies(bot: Bot, db, disabled_map: dict[int, list]) -> None:
@@ -323,10 +464,15 @@ async def _notify_low_balance(bot: Bot, db, warnings: dict[int, dict]) -> None:
         if not user or user["blocked_at"] or user["deleted_at"]:
             continue
         header = await _build_user_header(db, user)
+        level = info.get("level", "24h")
+        if level == "6h":
+            title = "Критично: баланса хватит примерно на 6 часов."
+        else:
+            title = "Предупреждение: баланса хватит примерно на 24 часа."
         text = (
             f"{header}\n\n"
-            "⚠️ Баланс может не хватить на следующий день.\n"
-            f"Нужно: {info['required']} ₽, сейчас: {info['balance']} ₽.\n"
+            f"{title}\n"
+            f"Нужно в сутки: {info['required']} ₽, сейчас: {info['balance']} ₽.\n"
             "Пополните баланс, чтобы прокси не отключились."
         )
         try:

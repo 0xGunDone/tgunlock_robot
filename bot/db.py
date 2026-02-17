@@ -28,6 +28,7 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "policy_enabled": "1",
     "offer_url": "",
     "policy_url": "",
+    "support_sla_minutes": "30",
 }
 
 
@@ -113,10 +114,20 @@ async def init_db(db: aiosqlite.Connection) -> None:
             FOREIGN KEY(invited_user_id) REFERENCES users(id)
         );
 
+        CREATE TABLE IF NOT EXISTS referral_clicks (
+            id INTEGER PRIMARY KEY,
+            link_code TEXT NOT NULL,
+            tg_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(link_code, tg_id)
+        );
+
         CREATE TABLE IF NOT EXISTS support_tickets (
             id INTEGER PRIMARY KEY,
             user_id INTEGER NOT NULL,
             status TEXT NOT NULL,
+            assigned_admin_tg_id INTEGER,
+            last_sla_alert_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id)
@@ -143,6 +154,16 @@ async def init_db(db: aiosqlite.Connection) -> None:
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id INTEGER PRIMARY KEY,
+            admin_tg_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT,
+            target_id TEXT,
+            details TEXT,
+            created_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code);
         CREATE INDEX IF NOT EXISTS idx_proxies_user_id ON proxies(user_id);
@@ -150,6 +171,8 @@ async def init_db(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_referral_events_inviter ON referral_events(inviter_user_id);
         CREATE INDEX IF NOT EXISTS idx_referral_events_invited ON referral_events(invited_user_id);
         CREATE INDEX IF NOT EXISTS idx_referral_links_code ON referral_links(code);
+        CREATE INDEX IF NOT EXISTS idx_referral_clicks_code ON referral_clicks(link_code);
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at);
         CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id);
         CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);
         CREATE INDEX IF NOT EXISTS idx_support_messages_ticket ON support_messages(ticket_id);
@@ -158,7 +181,21 @@ async def init_db(db: aiosqlite.Connection) -> None:
     await db.commit()
     await _ensure_column(db, "users", "last_menu_message_id", "last_menu_message_id INTEGER")
     await _ensure_column(db, "users", "last_low_balance_warn_at", "last_low_balance_warn_at TEXT")
+    await _ensure_column(db, "users", "last_warn_24h_at", "last_warn_24h_at TEXT")
+    await _ensure_column(db, "users", "last_warn_6h_at", "last_warn_6h_at TEXT")
     await _ensure_column(db, "proxies", "mtproto_secret", "mtproto_secret TEXT")
+    await _ensure_column(
+        db,
+        "support_tickets",
+        "assigned_admin_tg_id",
+        "assigned_admin_tg_id INTEGER",
+    )
+    await _ensure_column(
+        db,
+        "support_tickets",
+        "last_sla_alert_at",
+        "last_sla_alert_at TEXT",
+    )
 
 
 async def _ensure_column(

@@ -34,6 +34,11 @@ class Config:
     freekassa_secret2: str
     freekassa_api_base: str
     freekassa_ip: str
+    freekassa_reconcile_interval_sec: int
+    mtproxy_restart_cooldown_sec: int
+    rate_limit_start_per_min: int
+    rate_limit_topup_per_min: int
+    rate_limit_support_per_min: int
 
 
 def _parse_int_list(value: str) -> List[int]:
@@ -82,4 +87,9 @@ def load_config() -> Config:
         freekassa_secret2=os.getenv("FREEKASSA_SECRET_WORD_2", "").strip(),
         freekassa_api_base=os.getenv("FREEKASSA_API_BASE", "https://api.fk.life/v1").strip(),
         freekassa_ip=os.getenv("FREEKASSA_IP", "").strip(),
+        freekassa_reconcile_interval_sec=int(os.getenv("FREEKASSA_RECONCILE_INTERVAL_SEC", "180")),
+        mtproxy_restart_cooldown_sec=int(os.getenv("MTPROXY_RESTART_COOLDOWN_SEC", "30")),
+        rate_limit_start_per_min=int(os.getenv("RATE_LIMIT_START_PER_MIN", "10")),
+        rate_limit_topup_per_min=int(os.getenv("RATE_LIMIT_TOPUP_PER_MIN", "20")),
+        rate_limit_support_per_min=int(os.getenv("RATE_LIMIT_SUPPORT_PER_MIN", "8")),
     )

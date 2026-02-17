@@ -18,6 +18,7 @@ from bot.keyboards import (
     proxy_delete_confirm_kb,
     topup_quick_kb,
     topup_method_kb,
+    topup_recommend_days_kb,
     freekassa_pay_kb,
     freekassa_method_kb,
     freekassa_amount_kb,
@@ -38,7 +39,8 @@ from bot.services.settings import (
     convert_rub_to_stars,
 )
 from bot.services.mtproto import sync_mtproto_secrets, ensure_proxy_mtproto_secret, reenable_proxies_for_user
-from bot.services.freekassa import create_order
+from bot.services.freekassa import create_order, get_order_status
+from bot.services.rate_limit import is_allowed
 
 FREEKASSA_FEE_PERCENT = 12.5
 FREEKASSA_METHOD_OPTIONS = [
@@ -312,6 +314,42 @@ def _fk_method_label(method_value: int) -> str:
     return f"Метод {method_value}"
 
 
+def _fk_paid(data: dict) -> bool:
+    if not data:
+        return False
+    candidates = [
+        data.get("status"),
+        (data.get("order") or {}).get("status") if isinstance(data.get("order"), dict) else None,
+        data.get("state"),
+        data.get("paymentStatus"),
+    ]
+    for raw in candidates:
+        if raw is None:
+            continue
+        value = str(raw).strip().lower()
+        if value in {"paid", "success", "successful", "completed", "confirm", "confirmed", "2"}:
+            return True
+    return False
+
+
+async def _complete_paid_payment(db, user_id: int, payment_id: int) -> tuple[int, bool]:
+    payment = await dao.get_payment_by_id(db, payment_id)
+    if not payment:
+        return 0, False
+    if payment["status"] != "paid":
+        await dao.update_payment_status(
+            db,
+            payment_id,
+            "paid",
+            provider_payment_id=f"freekassa:{payment_id}",
+        )
+        await dao.add_user_balance(db, user_id, int(payment["amount"]))
+    reenabled = await reenable_proxies_for_user(db, user_id)
+    if reenabled:
+        await sync_mtproto_secrets(db)
+    return int(payment["amount"]), bool(reenabled)
+
+
 async def _issue_invoice(bot: Bot, chat_id: int, db, user_id: int, rub: int) -> None:
     rate = await get_decimal_setting(db, "stars_rate", "1")
     stars = convert_rub_to_stars(rub, rate)
@@ -379,6 +417,14 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     if config is None:
         await _send_bg_no_db(message, "Бот не настроен.")
         return
+    if not is_allowed(
+        message.from_user.id,
+        "start",
+        max(1, int(config.rate_limit_start_per_min)),
+        60,
+    ):
+        await _send_bg_no_db(message, "Слишком часто. Попробуйте через минуту.")
+        return
     await state.clear()
 
     db = await get_db(config.db_path)
@@ -402,6 +448,13 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             await sync_mtproto_secrets(db)
             user = None
 
+        ref_arg = extract_ref_code(_get_start_args(message))
+        if ref_arg:
+            # Track custom-ref link conversion funnel (unique by tg_id per code)
+            custom_link = await dao.get_referral_link(db, ref_arg)
+            if custom_link:
+                await dao.record_referral_click(db, ref_arg, message.from_user.id)
+
         if user:
             if user["blocked_at"]:
                 await _send_or_edit_main_message(message, db, "Ваш аккаунт заблокирован.")
@@ -412,25 +465,21 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             )
             await db.commit()
             await dao.update_user_last_seen(db, message.from_user.id)
-            user_row, header = await _get_user_and_header(db, message.from_user.id)
-        text = f"{header}\n\nГлавное меню" if header else "Главное меню"
-        text += docs_text
-        await _send_or_edit_main_message(
-            message,
-            db,
-            text,
-            reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
-            parse_mode="HTML" if docs_text else None,
-            force_new=True,
-        )
-        return
+            _, header = await _get_user_and_header(db, message.from_user.id)
+            text = f"{header}\n\nГлавное меню" if header else "Главное меню"
+            text += docs_text
+            await _send_or_edit_main_message(
+                message,
+                db,
+                text,
+                reply_markup=main_menu_inline_kb(_is_admin(message.from_user.id)),
+                parse_mode="HTML" if docs_text else None,
+            )
+            return
 
-        ref_arg = extract_ref_code(_get_start_args(message))
         free_credit = await get_int_setting(db, "free_credit", 0)
-
         ref_code = await _ensure_unique_ref_code(db)
         referred_by = ref_arg if ref_arg else None
-
         user_id = await dao.create_user(
             db,
             tg_id=message.from_user.id,
@@ -439,14 +488,13 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             referred_by=referred_by,
             balance=free_credit,
         )
-
         await _apply_referral(db, ref_arg, user_id)
 
         try:
             proxy = await _create_proxy_for_user(db, user_id, is_free=1)
             await sync_mtproto_secrets(db)
             links_text = await _build_proxy_links_text(db, proxy)
-            user_row, header = await _get_user_and_header(db, message.from_user.id)
+            _, header = await _get_user_and_header(db, message.from_user.id)
             prefix = f"{header}\n\n" if header else ""
             await _send_or_edit_main_message(
                 message,
@@ -544,6 +592,14 @@ async def menu_support(call: CallbackQuery, state: FSMContext) -> None:
     config = runtime.config
     if config is None:
         return
+    if not is_allowed(
+        call.from_user.id,
+        "support_menu",
+        max(1, int(config.rate_limit_support_per_min)),
+        60,
+    ):
+        await _safe_edit(call, "Слишком часто. Попробуйте через минуту.")
+        return
     db = await get_db(config.db_path)
     try:
         user, header = await _get_user_and_header(db, call.from_user.id)
@@ -553,9 +609,14 @@ async def menu_support(call: CallbackQuery, state: FSMContext) -> None:
         ticket = await dao.get_open_support_ticket_by_user(db, user["id"])
         await state.set_state(UserStates.waiting_support_message)
         if ticket:
+            status_label = {
+                "waiting_user": "ожидает вашего ответа",
+                "waiting_admin": "ожидает ответа поддержки",
+                "open": "открыт",
+            }.get(ticket["status"], ticket["status"])
             await _safe_edit(
                 call,
-                f"{header}\n\nУ вас открыт тикет #{ticket['id']}. Напишите сообщение или закройте тикет.",
+                f"{header}\n\nУ вас тикет #{ticket['id']} ({status_label}). Напишите сообщение или закройте тикет.",
                 reply_markup=support_user_kb(ticket["id"]),
             )
         else:
@@ -834,12 +895,23 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
     config = runtime.config
     if config is None:
         return
+    if not is_allowed(
+        call.from_user.id,
+        "topup_menu",
+        max(1, int(config.rate_limit_topup_per_min)),
+        60,
+    ):
+        await _safe_edit(call, "Слишком часто. Попробуйте через минуту.")
+        return
     db = await get_db(config.db_path)
     try:
         user, header = await _get_user_and_header(db, call.from_user.id)
         if not user:
             await _safe_edit(call, "Нажмите /start")
             return
+        active_count = await dao.count_active_proxies(db, user_id=user["id"])
+        day_price = await get_int_setting(db, "proxy_day_price", 0)
+        daily_cost = max(day_price, 0) * active_count
         stars_enabled = await get_bool_setting(db, "stars_enabled", True)
         freekassa_enabled = await get_bool_setting(db, "freekassa_enabled", False)
         if freekassa_enabled:
@@ -857,11 +929,19 @@ async def topup_start(call: CallbackQuery, state: FSMContext) -> None:
             hint = f"\n\nЗВЕЗДЫ МОЖНО КУПИТЬ <a href=\"{safe_url}\">ТУТ</a>"
         await state.clear()
         await state.set_state(UserStates.waiting_topup_amount)
+        rec_lines = []
+        if daily_cost > 0:
+            for days in (7, 14, 30):
+                need = max(daily_cost * days - int(user["balance"]), 0)
+                rec_lines.append(f"На {days} д.: {need} ₽")
+            rec_block = "Рекомендации:\n" + "\n".join(rec_lines)
+        else:
+            rec_block = "Рекомендации недоступны: нет активных прокси или цена/день = 0."
         await _safe_edit(
             call,
-            f"{header}\n\nВведите сумму пополнения в рублях (целое число).{hint}",
+            f"{header}\n\n{rec_block}\n\nВыберите срок или введите сумму пополнения в рублях.{hint}",
             parse_mode="HTML" if hint else None,
-            reply_markup=back_main_kb(),
+            reply_markup=topup_recommend_days_kb(),
         )
     finally:
         await db.close()
@@ -937,6 +1017,90 @@ async def topup_method_select(call: CallbackQuery, state: FSMContext) -> None:
             call,
             f"{header}\n\nСчёт выставлен на {rub} ₽. Оплатите, чтобы баланс пополнился.{hint}",
             parse_mode="HTML" if hint else None,
+            reply_markup=back_main_kb(),
+        )
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data.startswith("topup:rec:"))
+async def topup_recommend_days(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return
+    days = int(parts[2])
+    if days <= 0:
+        return
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        user, header = await _get_user_and_header(db, call.from_user.id)
+        if not user:
+            await _safe_edit(call, "Нажмите /start")
+            return
+        active_count = await dao.count_active_proxies(db, user_id=user["id"])
+        day_price = await get_int_setting(db, "proxy_day_price", 0)
+        daily_cost = max(day_price, 0) * active_count
+        if daily_cost <= 0:
+            await _safe_edit(
+                call,
+                f"{header}\n\nРекомендация недоступна: нет активных прокси или цена/день = 0.",
+                reply_markup=back_main_kb(),
+            )
+            return
+        need = max(daily_cost * days - int(user["balance"]), 0)
+        if need <= 0:
+            await _safe_edit(
+                call,
+                f"{header}\n\nНа {days} дней пополнение не требуется.",
+                reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
+            )
+            return
+
+        stars_enabled = await get_bool_setting(db, "stars_enabled", True)
+        freekassa_enabled = await get_bool_setting(db, "freekassa_enabled", False)
+        enable_44 = enable_36 = enable_43 = False
+        if freekassa_enabled:
+            enable_44, enable_36, enable_43 = await _freekassa_method_flags(db)
+            if not (enable_44 or enable_36 or enable_43):
+                freekassa_enabled = False
+        if not stars_enabled and not freekassa_enabled:
+            await _safe_edit(call, f"{header}\n\nСпособы пополнения отключены.")
+            return
+
+        note = f"Расчёт на {days} дней для {active_count} активных прокси."
+        if stars_enabled and freekassa_enabled:
+            await state.update_data(topup_amount=need)
+            await state.set_state(None)
+            await _safe_edit(
+                call,
+                f"{header}\n\n{note}\nСумма пополнения: {need} ₽.\nВыберите способ оплаты.",
+                reply_markup=topup_method_kb(True, True),
+            )
+            return
+        if freekassa_enabled:
+            await state.update_data(topup_method="freekassa", fk_amount=need, fk_note=note)
+            await state.set_state(None)
+            await _safe_edit(
+                call,
+                f"{header}\n\n{note}\nСумма пополнения: {need} ₽.\nВыберите способ оплаты.",
+                reply_markup=freekassa_method_kb(
+                    need,
+                    FREEKASSA_FEE_PERCENT,
+                    enable_44,
+                    enable_36,
+                    enable_43,
+                ),
+            )
+            return
+        await _issue_invoice(call.bot, call.from_user.id, db, user["id"], need)
+        await state.clear()
+        await _safe_edit(
+            call,
+            f"{header}\n\n{note}\nСчёт выставлен на {need} ₽.",
             reply_markup=back_main_kb(),
         )
     finally:
@@ -1251,6 +1415,23 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
     config = runtime.config
     if config is None:
         return
+    if not is_allowed(
+        message.from_user.id,
+        "topup_amount",
+        max(1, int(config.rate_limit_topup_per_min)),
+        60,
+    ):
+        db = await get_db(config.db_path)
+        try:
+            await _send_or_edit_main_message(
+                message,
+                db,
+                "Слишком часто. Попробуйте через минуту.",
+                reply_markup=back_main_kb(),
+            )
+        finally:
+            await db.close()
+        return
     try:
         rub = int(message.text.strip())
     except Exception:
@@ -1350,6 +1531,23 @@ async def support_message(message: Message, state: FSMContext) -> None:
     config = runtime.config
     if config is None:
         return
+    if not is_allowed(
+        message.from_user.id,
+        "support_message",
+        max(1, int(config.rate_limit_support_per_min)),
+        60,
+    ):
+        db = await get_db(config.db_path)
+        try:
+            await _send_or_edit_main_message(
+                message,
+                db,
+                "Слишком часто. Попробуйте через минуту.",
+                reply_markup=support_cancel_kb(),
+            )
+        finally:
+            await db.close()
+        return
     text = (message.text or "").strip()
     if not text:
         db = await get_db(config.db_path)
@@ -1378,6 +1576,8 @@ async def support_message(message: Message, state: FSMContext) -> None:
             ticket_id = await dao.create_support_ticket(db, user["id"])
 
         await dao.add_support_message(db, ticket_id, "user", message.from_user.id, text)
+        await dao.set_support_ticket_status(db, ticket_id, "waiting_admin")
+        await dao.update_support_ticket_sla_alert_at(db, ticket_id, "")
 
         # notify admins
         admin_ids = runtime.config.admin_tg_ids if runtime.config else []
@@ -1430,6 +1630,11 @@ async def support_close_user(call: CallbackQuery, state: FSMContext) -> None:
             await _safe_edit(call, "Тикет не найден.")
             return
         await dao.set_support_ticket_status(db, ticket_id, "closed")
+        for admin_id in (runtime.config.admin_tg_ids if runtime.config else []):
+            try:
+                await call.message.bot.send_message(admin_id, f"Тикет #{ticket_id} закрыт пользователем.")
+            except Exception:
+                pass
         _, header = await _get_user_and_header(db, call.from_user.id)
         await _safe_edit(
             call,
@@ -1474,6 +1679,74 @@ async def freekassa_cancel(call: CallbackQuery, state: FSMContext) -> None:
         text = f"{header}\n\nПлатёж отменён." if header else "Платёж отменён."
         await _safe_edit(call, text, reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)))
         await state.clear()
+    finally:
+        await db.close()
+
+
+@router.callback_query(F.data.startswith("fk:check:"))
+async def freekassa_check(call: CallbackQuery) -> None:
+    await call.answer()
+    parts = call.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return
+    payment_id = int(parts[2])
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        user = await dao.get_user_by_tg_id(db, call.from_user.id)
+        if not user:
+            await _safe_edit(call, "Нажмите /start")
+            return
+        payment = await dao.get_payment_by_id(db, payment_id)
+        if not payment or payment["user_id"] != user["id"]:
+            await _safe_edit(call, "Платёж не найден.")
+            return
+        if payment["status"] == "paid":
+            _, header = await _get_user_and_header(db, call.from_user.id)
+            await _safe_edit(
+                call,
+                f"{header}\n\nПлатёж уже обработан.",
+                reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
+            )
+            return
+        if payment["status"] in {"failed", "canceled"}:
+            await _safe_edit(
+                call,
+                f"Платёж уже в статусе: {payment['status']}.",
+                reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
+            )
+            return
+        if not (config.freekassa_shop_id and config.freekassa_api_key):
+            await _safe_edit(call, "FreeKassa не настроена.")
+            return
+
+        status = await get_order_status(
+            api_base=config.freekassa_api_base,
+            api_key=config.freekassa_api_key,
+            shop_id=config.freekassa_shop_id,
+            payment_id=payment_id,
+        )
+        if status.get("error"):
+            await _safe_edit(call, "Не удалось проверить платёж. Попробуйте позже.")
+            return
+        if not _fk_paid(status):
+            await _safe_edit(call, "Платёж пока не подтверждён. Попробуйте снова через 10-20 секунд.")
+            return
+
+        amount, reenabled = await _complete_paid_payment(db, user["id"], payment_id)
+        _, header = await _get_user_and_header(db, call.from_user.id)
+        text = (
+            f"{header}\n\nБаланс пополнен на {amount} ₽.\nПрокси снова активны."
+            if reenabled
+            else f"{header}\n\nБаланс пополнен на {amount} ₽."
+        )
+        await _safe_edit(
+            call,
+            text,
+            reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
+        )
     finally:
         await db.close()
 

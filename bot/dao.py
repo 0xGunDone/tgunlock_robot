@@ -95,6 +95,26 @@ async def update_user_low_balance_warn_at(
     await db.commit()
 
 
+async def update_user_warn_24h_at(
+    db: aiosqlite.Connection, user_id: int, value: str
+) -> None:
+    await db.execute(
+        "UPDATE users SET last_warn_24h_at = ? WHERE id = ?",
+        (value, user_id),
+    )
+    await db.commit()
+
+
+async def update_user_warn_6h_at(
+    db: aiosqlite.Connection, user_id: int, value: str
+) -> None:
+    await db.execute(
+        "UPDATE users SET last_warn_6h_at = ? WHERE id = ?",
+        (value, user_id),
+    )
+    await db.commit()
+
+
 async def set_user_balance(db: aiosqlite.Connection, user_id: int, balance: int) -> None:
     await db.execute("UPDATE users SET balance = ? WHERE id = ?", (balance, user_id))
     await db.commit()
@@ -259,7 +279,8 @@ async def update_proxies_last_billed_by_user(db: aiosqlite.Connection, user_id: 
 async def get_active_proxies_for_billing(db: aiosqlite.Connection) -> List[aiosqlite.Row]:
     cur = await db.execute(
         "SELECT p.*, u.balance AS user_balance, u.blocked_at AS user_blocked, "
-        "u.deleted_at AS user_deleted, u.last_low_balance_warn_at AS user_warn_at "
+        "u.deleted_at AS user_deleted, u.last_low_balance_warn_at AS user_warn_at, "
+        "u.last_warn_24h_at AS user_warn_24h_at, u.last_warn_6h_at AS user_warn_6h_at "
         "FROM proxies p JOIN users u ON u.id = p.user_id "
         "WHERE p.status = 'active' AND p.deleted_at IS NULL AND u.deleted_at IS NULL"
     )
@@ -322,6 +343,18 @@ async def get_payments_sum(db: aiosqlite.Connection, since_iso: str) -> int:
     return int(row["total"])
 
 
+async def list_pending_freekassa_payments(
+    db: aiosqlite.Connection, limit: int = 100
+) -> List[aiosqlite.Row]:
+    cur = await db.execute(
+        "SELECT * FROM payments "
+        "WHERE status = 'pending' AND payload LIKE 'freekassa:%' "
+        "ORDER BY id DESC LIMIT ?",
+        (limit,),
+    )
+    return await cur.fetchall()
+
+
 async def get_settings_map(db: aiosqlite.Connection) -> Dict[str, str]:
     cur = await db.execute("SELECT key, value FROM settings")
     rows = await cur.fetchall()
@@ -348,7 +381,9 @@ async def get_open_support_ticket_by_user(
     db: aiosqlite.Connection, user_id: int
 ) -> Optional[aiosqlite.Row]:
     cur = await db.execute(
-        "SELECT * FROM support_tickets WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM support_tickets "
+        "WHERE user_id = ? AND status IN ('open', 'waiting_admin', 'waiting_user') "
+        "ORDER BY id DESC LIMIT 1",
         (user_id,),
     )
     return await cur.fetchone()
@@ -377,6 +412,26 @@ async def set_support_ticket_status(db: aiosqlite.Connection, ticket_id: int, st
     await db.commit()
 
 
+async def set_support_ticket_assignee(
+    db: aiosqlite.Connection, ticket_id: int, admin_tg_id: int | None
+) -> None:
+    await db.execute(
+        "UPDATE support_tickets SET assigned_admin_tg_id = ?, updated_at = ? WHERE id = ?",
+        (admin_tg_id, now_iso(), ticket_id),
+    )
+    await db.commit()
+
+
+async def update_support_ticket_sla_alert_at(
+    db: aiosqlite.Connection, ticket_id: int, value: str
+) -> None:
+    await db.execute(
+        "UPDATE support_tickets SET last_sla_alert_at = ? WHERE id = ?",
+        (value, ticket_id),
+    )
+    await db.commit()
+
+
 async def add_support_message(
     db: aiosqlite.Connection,
     ticket_id: int,
@@ -401,9 +456,10 @@ async def list_support_tickets(
     db: aiosqlite.Connection, status: str | None = "open", limit: int = 20, offset: int = 0
 ) -> List[aiosqlite.Row]:
     query = (
-        "SELECT t.*, u.tg_id, u.username "
+        "SELECT t.*, u.tg_id, u.username, au.username AS assigned_admin_username "
         "FROM support_tickets t "
         "JOIN users u ON u.id = t.user_id "
+        "LEFT JOIN users au ON au.tg_id = t.assigned_admin_tg_id "
     )
     params: list[Any] = []
     if status:
@@ -425,6 +481,20 @@ async def list_support_messages(
     rows = await cur.fetchall()
     rows.reverse()
     return rows
+
+
+async def list_overdue_support_tickets(
+    db: aiosqlite.Connection, older_than_iso: str
+) -> List[aiosqlite.Row]:
+    cur = await db.execute(
+        "SELECT t.*, u.tg_id, u.username, au.username AS assigned_admin_username "
+        "FROM support_tickets t "
+        "JOIN users u ON u.id = t.user_id "
+        "LEFT JOIN users au ON au.tg_id = t.assigned_admin_tg_id "
+        "WHERE t.status = 'waiting_admin' AND t.updated_at <= ?",
+        (older_than_iso,),
+    )
+    return await cur.fetchall()
 
 
 async def insert_processed_update(db: aiosqlite.Connection, update_id: int) -> bool:
@@ -482,6 +552,34 @@ async def create_referral_event(
     await db.commit()
 
 
+async def record_referral_click(db: aiosqlite.Connection, link_code: str, tg_id: int) -> None:
+    await db.execute(
+        "INSERT OR IGNORE INTO referral_clicks(link_code, tg_id, created_at) VALUES(?, ?, ?)",
+        (link_code, tg_id, now_iso()),
+    )
+    await db.commit()
+
+
+async def get_referral_clicks_count(db: aiosqlite.Connection, link_code: str) -> int:
+    cur = await db.execute(
+        "SELECT COUNT(*) AS cnt FROM referral_clicks WHERE link_code = ?",
+        (link_code,),
+    )
+    row = await cur.fetchone()
+    return int(row["cnt"])
+
+
+async def get_referral_paid_sum_by_code(db: aiosqlite.Connection, link_code: str) -> int:
+    cur = await db.execute(
+        "SELECT COALESCE(SUM(p.amount), 0) AS total "
+        "FROM payments p JOIN users u ON u.id = p.user_id "
+        "WHERE p.status = 'paid' AND u.referred_by = ?",
+        (link_code,),
+    )
+    row = await cur.fetchone()
+    return int(row["total"])
+
+
 async def create_referral_link(
     db: aiosqlite.Connection,
     code: str,
@@ -521,3 +619,20 @@ async def list_referral_links(db: aiosqlite.Connection) -> List[aiosqlite.Row]:
 async def disable_referral_link(db: aiosqlite.Connection, code: str) -> None:
     await db.execute("UPDATE referral_links SET disabled_at = ? WHERE code = ?", (now_iso(), code))
     await db.commit()
+
+
+async def create_admin_audit_log(
+    db: aiosqlite.Connection,
+    admin_tg_id: int,
+    action: str,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    details: str | None = None,
+) -> int:
+    cur = await db.execute(
+        "INSERT INTO admin_audit_log(admin_tg_id, action, target_type, target_id, details, created_at) "
+        "VALUES(?, ?, ?, ?, ?, ?)",
+        (admin_tg_id, action, target_type, target_id, details, now_iso()),
+    )
+    await db.commit()
+    return int(cur.lastrowid)

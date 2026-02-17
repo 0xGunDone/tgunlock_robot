@@ -140,6 +140,27 @@ def _support_user_label(username: str | None, tg_id: int) -> str:
     return f"tg:{tg_id}"
 
 
+async def _audit(
+    db,
+    admin_tg_id: int,
+    action: str,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    details: str | None = None,
+) -> None:
+    try:
+        await dao.create_admin_audit_log(
+            db,
+            admin_tg_id=admin_tg_id,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            details=details,
+        )
+    except Exception:
+        pass
+
+
 async def _user_header(db, user_row) -> str:
     if not user_row:
         return "Баланс: 0 ₽"
@@ -540,6 +561,14 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
                 await _admin_send_or_edit(message, "Неверный формат суммы.")
                 return
             await dao.add_user_balance(db, user_id, delta)
+            await _audit(
+                db,
+                message.from_user.id,
+                "user_balance_delta",
+                target_type="user",
+                target_id=str(user_id),
+                details=str(delta),
+            )
             if delta > 0:
                 reenabled = await reenable_proxies_for_user(db, user_id)
                 if reenabled:
@@ -561,17 +590,20 @@ async def admin_user_actions(message: Message, state: FSMContext) -> None:
 
         if text == "block":
             await dao.block_user(db, user_id)
+            await _audit(db, message.from_user.id, "user_block", target_type="user", target_id=str(user_id))
             await _admin_send_or_edit(message, "Пользователь заблокирован.")
             return
 
         if text == "unblock":
             await dao.unblock_user(db, user_id)
+            await _audit(db, message.from_user.id, "user_unblock", target_type="user", target_id=str(user_id))
             await _admin_send_or_edit(message, "Пользователь разблокирован.")
             return
 
         if text == "delete":
             await dao.delete_user(db, user_id)
             await sync_mtproto_secrets(db)
+            await _audit(db, message.from_user.id, "user_delete", target_type="user", target_id=str(user_id))
             await _admin_send_or_edit(message, "Пользователь удалён.")
             return
 
@@ -614,6 +646,14 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
         if action == "delta" and len(parts) == 4:
             delta = int(parts[3])
             await dao.add_user_balance(db, user_id, delta)
+            await _audit(
+                db,
+                call.from_user.id,
+                "user_balance_delta",
+                target_type="user",
+                target_id=str(user_id),
+                details=str(delta),
+            )
             if delta > 0:
                 reenabled = await reenable_proxies_for_user(db, user_id)
                 if reenabled:
@@ -637,15 +677,19 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
             return
         elif action == "reset":
             await dao.set_user_balance(db, user_id, 0)
+            await _audit(db, call.from_user.id, "user_balance_reset", target_type="user", target_id=str(user_id))
         elif action == "block":
             user = await dao.get_user_by_id(db, user_id)
             if user and user["blocked_at"]:
                 await dao.unblock_user(db, user_id)
+                await _audit(db, call.from_user.id, "user_unblock", target_type="user", target_id=str(user_id))
             else:
                 await dao.block_user(db, user_id)
+                await _audit(db, call.from_user.id, "user_block", target_type="user", target_id=str(user_id))
         elif action == "delete":
             await dao.delete_user(db, user_id)
             await sync_mtproto_secrets(db)
+            await _audit(db, call.from_user.id, "user_delete", target_type="user", target_id=str(user_id))
         elif action == "proxies":
             proxies = await dao.list_proxies_by_user(db, user_id)
             if not proxies:
@@ -660,9 +704,11 @@ async def admin_user_inline(call: CallbackQuery, state: FSMContext) -> None:
             await dao.set_proxies_status_by_user(db, user_id, "active")
             await dao.update_proxies_last_billed_by_user(db, user_id)
             await sync_mtproto_secrets(db)
+            await _audit(db, call.from_user.id, "user_proxies_enable_all", target_type="user", target_id=str(user_id))
         elif action == "disable_all":
             await dao.set_proxies_status_by_user(db, user_id, "disabled")
             await sync_mtproto_secrets(db)
+            await _audit(db, call.from_user.id, "user_proxies_disable_all", target_type="user", target_id=str(user_id))
         elif action == "open":
             pass
 
@@ -741,6 +787,14 @@ async def admin_user_custom_delta(message: Message, state: FSMContext) -> None:
     db = await get_db(config.db_path)
     try:
         await dao.add_user_balance(db, user_id, delta)
+        await _audit(
+            db,
+            message.from_user.id,
+            "user_balance_delta",
+            target_type="user",
+            target_id=str(user_id),
+            details=str(delta),
+        )
         if delta > 0:
             reenabled = await reenable_proxies_for_user(db, user_id)
             if reenabled:
@@ -875,13 +929,21 @@ async def admin_support_list(call: CallbackQuery, state: FSMContext) -> None:
         return
     db = await get_db(config.db_path)
     try:
-        tickets = await dao.list_support_tickets(db, status="open", limit=20)
+        tickets = await dao.list_support_tickets(db, status=None, limit=20)
+        tickets = [t for t in tickets if t["status"] != "closed"]
         if not tickets:
             await _safe_edit(call, "Открытых тикетов нет.", reply_markup=admin_menu_inline_kb())
             return
         items = []
         for t in tickets:
-            label = f"#{t['id']} {_support_user_label(t['username'], t['tg_id'])}"
+            assignee = (
+                f" @{t['assigned_admin_username']}"
+                if t["assigned_admin_username"]
+                else (" назначен" if t["assigned_admin_tg_id"] else "")
+            )
+            label = (
+                f"#{t['id']} [{t['status']}] {_support_user_label(t['username'], t['tg_id'])}{assignee}"
+            )
             items.append({"id": t["id"], "label": label})
         await _safe_edit(
             call,
@@ -915,9 +977,18 @@ async def admin_support_open(call: CallbackQuery, state: FSMContext) -> None:
         tg_id = user["tg_id"] if user else 0
         status = ticket["status"]
         messages = await dao.list_support_messages(db, ticket_id, limit=10)
+        assigned_text = "—"
+        if ticket["assigned_admin_tg_id"]:
+            assigned_admin = await dao.get_user_by_tg_id(db, int(ticket["assigned_admin_tg_id"]))
+            assigned_text = (
+                f"@{assigned_admin['username']}"
+                if assigned_admin and assigned_admin["username"]
+                else str(ticket["assigned_admin_tg_id"])
+            )
         lines = [
             f"Тикет #{ticket_id} ({status})",
             f"Пользователь: {_support_user_label(username, tg_id)} (tg_id: {tg_id})",
+            f"Назначен: {assigned_text}",
             "",
             "История:",
         ]
@@ -1066,6 +1137,14 @@ async def admin_settings_set(message: Message, state: FSMContext) -> None:
     db = await get_db(config.db_path)
     try:
         await dao.set_setting(db, key, value)
+        await _audit(
+            db,
+            message.from_user.id,
+            "setting_set",
+            target_type="setting",
+            target_id=key,
+            details=value,
+        )
         if key == "mtproto_enabled":
             await sync_mtproto_secrets(db)
         settings_map = await dao.get_settings_map(db)
@@ -1141,6 +1220,14 @@ async def admin_settings_toggle(call: CallbackQuery, state: FSMContext) -> None:
         current = await dao.get_setting(db, key, "0")
         new_value = "0" if (current or "0") == "1" else "1"
         await dao.set_setting(db, key, new_value)
+        await _audit(
+            db,
+            call.from_user.id,
+            "setting_toggle",
+            target_type="setting",
+            target_id=key,
+            details=new_value,
+        )
         if key == "mtproto_enabled":
             await sync_mtproto_secrets(db)
         if key == "bg_enabled":
@@ -1161,9 +1248,28 @@ async def admin_support_reply_pick(call: CallbackQuery, state: FSMContext) -> No
     if len(parts) != 3 or not parts[2].isdigit():
         return
     ticket_id = int(parts[2])
+    config = runtime.config
+    if config is None:
+        return
+    db = await get_db(config.db_path)
+    try:
+        ticket = await dao.get_support_ticket(db, ticket_id)
+        if not ticket:
+            await _safe_edit(call, "Тикет не найден.")
+            return
+        assigned = ticket["assigned_admin_tg_id"]
+        if assigned and int(assigned) != call.from_user.id:
+            await _safe_edit(
+                call,
+                f"Тикет назначен на администратора {assigned}. Ответ всё равно можно отправить, назначение сменится.",
+                reply_markup=support_admin_reply_kb(),
+            )
+        else:
+            await _safe_edit(call, f"Введите ответ для тикета #{ticket_id}:", reply_markup=support_admin_reply_kb())
+    finally:
+        await db.close()
     await state.update_data(support_ticket_id=ticket_id)
     await state.set_state(AdminStates.waiting_support_reply)
-    await _safe_edit(call, f"Введите ответ для тикета #{ticket_id}:", reply_markup=support_admin_reply_kb())
 
 
 @router.callback_query(F.data.startswith("support:close:"))
@@ -1185,6 +1291,13 @@ async def admin_support_close(call: CallbackQuery, state: FSMContext) -> None:
             await _safe_edit(call, "Тикет не найден.")
             return
         await dao.set_support_ticket_status(db, ticket_id, "closed")
+        await _audit(
+            db,
+            call.from_user.id,
+            "support_close",
+            target_type="ticket",
+            target_id=str(ticket_id),
+        )
         user = await dao.get_user_by_id(db, ticket["user_id"])
         if user:
             header = await _user_header(db, user)
@@ -1239,8 +1352,17 @@ async def admin_support_reply_send(message: Message, state: FSMContext) -> None:
             await state.clear()
             return
         await dao.add_support_message(db, int(ticket_id), "admin", message.from_user.id, text)
-        if ticket["status"] != "open":
-            await dao.set_support_ticket_status(db, int(ticket_id), "open")
+        await dao.set_support_ticket_assignee(db, int(ticket_id), message.from_user.id)
+        await dao.set_support_ticket_status(db, int(ticket_id), "waiting_user")
+        await dao.update_support_ticket_sla_alert_at(db, int(ticket_id), "")
+        await _audit(
+            db,
+            message.from_user.id,
+            "support_reply",
+            target_type="ticket",
+            target_id=str(ticket_id),
+            details=text[:250],
+        )
         user = await dao.get_user_by_id(db, ticket["user_id"])
         if user:
             header = await _user_header(db, user)
@@ -1325,6 +1447,25 @@ async def _send_export_csv(kind: str, message: Message | CallbackQuery, db) -> N
                 ]
             )
 
+    if kind == "audit":
+        rows = await db.execute(
+            "SELECT id, admin_tg_id, action, target_type, target_id, details, created_at "
+            "FROM admin_audit_log ORDER BY id DESC"
+        )
+        writer.writerow(["id", "admin_tg_id", "action", "target_type", "target_id", "details", "created_at"])
+        for row in await rows.fetchall():
+            writer.writerow(
+                [
+                    row["id"],
+                    row["admin_tg_id"],
+                    row["action"],
+                    row["target_type"],
+                    row["target_id"],
+                    row["details"],
+                    row["created_at"],
+                ]
+            )
+
     data = buffer.getvalue().encode("utf-8")
     file = BufferedInputFile(data, filename=f"{kind}.csv")
     if isinstance(message, CallbackQuery):
@@ -1339,7 +1480,7 @@ async def admin_export_csv(message: Message) -> None:
         return
 
     kind = message.text.strip().lower()
-    if kind not in {"users", "users_balances", "proxies", "payments", "referrals"}:
+    if kind not in {"users", "users_balances", "proxies", "payments", "referrals", "audit"}:
         return
 
     config = runtime.config
@@ -1358,7 +1499,7 @@ async def admin_export_cb(call: CallbackQuery) -> None:
         return
     await call.answer()
     kind = call.data.split(":", 1)[1]
-    if kind not in {"users", "users_balances", "proxies", "payments", "referrals"}:
+    if kind not in {"users", "users_balances", "proxies", "payments", "referrals", "audit"}:
         return
     config = runtime.config
     if config is None:
@@ -1429,6 +1570,14 @@ async def admin_broadcast_send(call: CallbackQuery, state: FSMContext) -> None:
 
         cur = await db.execute(query, params)
         rows = await cur.fetchall()
+        await _audit(
+            db,
+            call.from_user.id,
+            "broadcast_send",
+            target_type="broadcast",
+            target_id=action,
+            details=f"recipients={len(rows)}",
+        )
 
         await _safe_edit(call, f"Начинаю рассылку. Получателей: {len(rows)}")
         delay = config.broadcast_delay_ms / 1000.0
@@ -1475,7 +1624,7 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
         )
         totals = await cur.fetchone()
         total_cnt = int(totals["cnt"]) if totals else 0
-        total_bonus = int(totals["total"]) if totals else 0
+        total_bonus_paid = int(totals["total"]) if totals else 0
         top_lines = []
         cur = await db.execute(
             "SELECT inviter_user_id, COUNT(*) AS cnt, COALESCE(SUM(bonus_inviter), 0) AS bonus "
@@ -1489,23 +1638,35 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
         if links:
             lines = []
             bot_info = await call.bot.get_me()
+            total_clicks = 0
+            total_revenue = 0
             for link in links:
+                clicks = await dao.get_referral_clicks_count(db, link["code"])
                 cur = await db.execute(
                     "SELECT COUNT(*) AS cnt, COALESCE(SUM(bonus_inviter + bonus_invited), 0) AS total "
                     "FROM referral_events WHERE link_code = ?",
                     (link["code"],),
                 )
                 stats = await cur.fetchone()
-                uses = int(stats["cnt"])
-                total_bonus = int(stats["total"])
+                regs = int(stats["cnt"])
+                link_bonus_paid = int(stats["total"])
+                revenue = await dao.get_referral_paid_sum_by_code(db, link["code"])
+                conv = (regs / clicks * 100) if clicks > 0 else 0.0
+                roi = ((revenue - link_bonus_paid) / link_bonus_paid * 100) if link_bonus_paid > 0 else 0.0
+                total_clicks += clicks
+                total_revenue += revenue
                 url = f"https://t.me/{bot_info.username}?start={link['code']}"
                 lines.append(
                     f"{link['code']} — {url}\n"
                     f"owner={link['owner_user_id']} "
                     f"bonus({link['bonus_inviter']}/{link['bonus_invited']}) "
-                    f"uses={uses} total_bonus={total_bonus}₽"
+                    f"clicks={clicks} regs={regs} conv={conv:.1f}% "
+                    f"revenue={revenue}₽ bonus_paid={link_bonus_paid}₽ roi={roi:.1f}%"
                 )
-            header = f"Рефералы: всего {total_cnt}, начислено {total_bonus} ₽"
+            header = (
+                f"Рефералы: регистраций {total_cnt}, начислено {total_bonus_paid} ₽, "
+                f"кликов {total_clicks}, выручка {total_revenue} ₽"
+            )
             top_block = "\n".join(top_lines) if top_lines else "Нет данных"
             codes = [link["code"] for link in links]
             await _safe_edit(
@@ -1514,7 +1675,7 @@ async def admin_referrals(call: CallbackQuery, state: FSMContext) -> None:
                 reply_markup=admin_referrals_list_kb(codes),
             )
         else:
-            header = f"Рефералы: всего {total_cnt}, начислено {total_bonus} ₽"
+            header = f"Рефералы: регистраций {total_cnt}, начислено {total_bonus_paid} ₽"
             top_block = "\n".join(top_lines) if top_lines else "Нет данных"
             await _safe_edit(
                 call,
@@ -1556,6 +1717,13 @@ async def admin_ref_delete_confirm(call: CallbackQuery) -> None:
     db = await get_db(config.db_path)
     try:
         await dao.disable_referral_link(db, code)
+        await _audit(
+            db,
+            call.from_user.id,
+            "referral_link_disable",
+            target_type="ref_link",
+            target_id=code,
+        )
     finally:
         await db.close()
     await _safe_edit(call, f"Ссылка `{code}` удалена.", reply_markup=admin_referrals_kb(), parse_mode=None)
@@ -1644,6 +1812,14 @@ async def admin_ref_bonuses(message: Message, state: FSMContext) -> None:
             bonus_invited=bonus_invited,
             limit_total=None,
             limit_per_user=None,
+        )
+        await _audit(
+            db,
+            message.from_user.id,
+            "referral_link_create",
+            target_type="ref_link",
+            target_id=code,
+            details=f"bonus_invited={bonus_invited};bonus_inviter={bonus_inviter}",
         )
         bot_info = await message.bot.get_me()
         link = f"https://t.me/{bot_info.username}?start={code}"

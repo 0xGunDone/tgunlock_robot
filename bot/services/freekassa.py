@@ -141,6 +141,55 @@ async def get_currencies(api_base: str, api_key: str, shop_id: str) -> Dict[str,
             return data
 
 
+async def get_order_status(
+    api_base: str,
+    api_key: str,
+    shop_id: str,
+    payment_id: int,
+) -> Dict[str, Any]:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-API-KEY": api_key,
+    }
+    payload = {
+        "shopId": int(shop_id),
+        "nonce": int(time.time() * 1000),
+        "paymentId": str(payment_id),
+    }
+    payload["signature"] = generate_api_signature(payload, api_key)
+    base = api_base.rstrip("/")
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+        try:
+            async with session.post(f"{base}/orders/status", json=payload, headers=headers) as resp:
+                text = await resp.text()
+                try:
+                    data = await resp.json(encoding="utf-8")
+                except Exception:
+                    data = {"raw": text}
+                if resp.status == 200:
+                    return data
+        except Exception:
+            pass
+
+        # Fallback for accounts where order lookup endpoint is enabled only by order id path
+        try:
+            async with session.get(
+                f"{base}/orders/{payment_id}?shopId={shop_id}",
+                headers=headers,
+            ) as resp:
+                text = await resp.text()
+                try:
+                    data = await resp.json(encoding="utf-8")
+                except Exception:
+                    data = {"raw": text}
+                if resp.status == 200:
+                    return data
+                return {"error": data.get("message") or data.get("error") or "FreeKassa error"}
+        except Exception:
+            return {"error": "FreeKassa status check failed"}
+
+
 def verify_notification(data: dict[str, str], shop_id: str, secret_word_2: str) -> bool:
     merchant_id = data.get("MERCHANT_ID") or data.get("merchant_id") or data.get("shopId") or ""
     amount = data.get("AMOUNT") or data.get("amount") or ""

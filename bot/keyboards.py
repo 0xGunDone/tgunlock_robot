@@ -457,6 +457,7 @@ def admin_export_kb() -> InlineKeyboardMarkup:
             ],
             [
                 _btn("Referrals", callback_data="admin_export:referrals", style=STYLE_PRIMARY),
+                _btn("Audit", callback_data="admin_export:audit", style=STYLE_PRIMARY),
             ],
             [_btn("⬅️ Назад", callback_data="menu:admin", style=STYLE_DANGER)],
         ]
@@ -524,6 +525,19 @@ def topup_method_kb(stars_enabled: bool, freekassa_enabled: bool) -> InlineKeybo
         buttons.append([_btn("💳 FreeKassa", callback_data="topup:method:freekassa", style=STYLE_PRIMARY)])
     buttons.append([_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def topup_recommend_days_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _btn("На 7 дней", callback_data="topup:rec:7", style=STYLE_SUCCESS),
+                _btn("На 14 дней", callback_data="topup:rec:14", style=STYLE_SUCCESS),
+                _btn("На 30 дней", callback_data="topup:rec:30", style=STYLE_SUCCESS),
+            ],
+            [_btn("⬅️ Назад", callback_data="menu:main", style=STYLE_DANGER)],
+        ]
+    )
 
 
 def freekassa_method_kb(
@@ -602,6 +616,7 @@ def topup_quick_kb(method: str, show_method_back: bool = False) -> InlineKeyboar
 def freekassa_pay_kb(payment_id: int, pay_url: str) -> InlineKeyboardMarkup:
     buttons = [
         [_btn("✅ Оплатить", url=pay_url, style=STYLE_SUCCESS)],
+        [_btn("🔄 Проверить оплату", callback_data=f"fk:check:{payment_id}", style=STYLE_PRIMARY)],
         [_btn("❌ Отменить", callback_data=f"fk:cancel:{payment_id}", style=STYLE_DANGER)],
         [_btn("⬅️ Назад", callback_data="menu:topup", style=STYLE_DANGER)],
     ]

@@ -46,6 +46,8 @@ async def run_billing_once(db: aiosqlite.Connection) -> BillingResult:
                 "blocked": user_blocked,
                 "deleted": user_deleted,
                 "warn_at": proxy["user_warn_at"],
+                "warn_24h_at": proxy["user_warn_24h_at"],
+                "warn_6h_at": proxy["user_warn_6h_at"],
                 "active_count": 0,
             },
         )
@@ -80,13 +82,26 @@ async def run_billing_once(db: aiosqlite.Connection) -> BillingResult:
         required = day_price * active_count
         if state["balance"] >= required:
             continue
-        if state["warn_at"] == today_key:
-            continue
+        threshold_6h = max(1, (required + 3) // 4)
+        if state["balance"] < threshold_6h:
+            level = "6h"
+            if state["warn_6h_at"] == today_key:
+                continue
+            await dao.update_user_warn_6h_at(db, user_id, today_key)
+            state["warn_6h_at"] = today_key
+        else:
+            level = "24h"
+            if state["warn_24h_at"] == today_key:
+                continue
+            await dao.update_user_warn_24h_at(db, user_id, today_key)
+            state["warn_24h_at"] = today_key
         await dao.update_user_low_balance_warn_at(db, user_id, today_key)
         low_balance_warnings[user_id] = {
             "balance": state["balance"],
             "required": required,
             "active_count": active_count,
+            "level": level,
+            "hours_left": round((state["balance"] / required) * 24, 1) if required > 0 else 0,
         }
 
     return BillingResult(
