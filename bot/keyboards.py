@@ -551,14 +551,11 @@ def topup_recommend_days_kb() -> InlineKeyboardMarkup:
 def _fk_fee_total(amount: int, method_id: int) -> float:
     if method_id == 44:  # SBP
         percent = 7.0
-        min_fee = 10.0
     elif method_id == 36:  # Card
         percent = 8.0
-        min_fee = 50.0
     else:  # 43 SberPay
         percent = 8.0
-        min_fee = 10.0
-    fee = max(amount * (percent / 100.0), min_fee)
+    fee = amount * (percent / 100.0)
     return amount + fee
 
 
@@ -573,7 +570,7 @@ def freekassa_method_kb(
     enable_43: bool = True,
 ) -> InlineKeyboardMarkup:
     buttons = []
-    if enable_44:
+    if enable_44 and amount >= 10:
         total_44 = _fmt_money(_fk_fee_total(amount, 44))
         buttons.append(
             [_btn(f"СБП QR (НСПК) — {total_44} ₽", callback_data="fk:pay:44", style=STYLE_PRIMARY)]
@@ -583,7 +580,7 @@ def freekassa_method_kb(
         buttons.append(
             [_btn(f"Банковская карта РФ — {total_36} ₽", callback_data="fk:pay:36", style=STYLE_PRIMARY)]
         )
-    if enable_43:
+    if enable_43 and amount >= 10:
         total_43 = _fmt_money(_fk_fee_total(amount, 43))
         buttons.append(
             [_btn(f"СберPay — {total_43} ₽", callback_data="fk:pay:43", style=STYLE_PRIMARY)]

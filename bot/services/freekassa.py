@@ -160,6 +160,30 @@ async def get_order_status(
     payload["signature"] = generate_api_signature(payload, api_key)
     base = api_base.rstrip("/")
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+        # Preferred flow: orders list filtered by merchant paymentId
+        try:
+            async with session.post(f"{base}/orders", json=payload, headers=headers) as resp:
+                text = await resp.text()
+                try:
+                    data = await resp.json(encoding="utf-8")
+                except Exception:
+                    data = {"raw": text}
+                if resp.status == 200:
+                    orders = data.get("orders")
+                    if isinstance(orders, list) and orders:
+                        # pick exact merchant order id if present
+                        target = None
+                        for item in orders:
+                            if str(item.get("merchant_order_id", "")) == str(payment_id):
+                                target = item
+                                break
+                        if target is None:
+                            target = orders[0]
+                        return {"status": target.get("status"), "order": target, "orders": orders}
+                    return data
+        except Exception:
+            pass
+
         try:
             async with session.post(f"{base}/orders/status", json=payload, headers=headers) as resp:
                 text = await resp.text()

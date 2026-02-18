@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs
@@ -24,6 +25,7 @@ from bot.services.freekassa import verify_notification, get_order_status
 from fastapi.responses import PlainTextResponse
 
 config = load_config()
+logger = logging.getLogger(__name__)
 
 runtime.config = config
 
@@ -97,16 +99,25 @@ async def _build_user_header(db, user_row) -> str:
 def _fk_status_from_data(data: dict) -> str:
     if not data:
         return "unknown"
+    order = data.get("order")
+    if isinstance(order, dict) and order.get("status") is not None:
+        data = {**data, "_order_status": order.get("status")}
+    orders = data.get("orders")
+    if isinstance(orders, list) and orders:
+        first = orders[0]
+        if isinstance(first, dict) and first.get("status") is not None:
+            data = {**data, "_orders_status": first.get("status")}
     candidates = [
         data.get("status"),
-        (data.get("order") or {}).get("status") if isinstance(data.get("order"), dict) else None,
+        data.get("_order_status"),
+        data.get("_orders_status"),
         data.get("state"),
         data.get("paymentStatus"),
     ]
-    paid = {"paid", "success", "successful", "completed", "confirm", "confirmed", "2"}
-    pending = {"new", "created", "pending", "wait", "waiting", "processing", "process", "0", "1"}
-    canceled = {"canceled", "cancelled", "cancel", "aborted", "void", "3"}
-    failed = {"failed", "fail", "error", "declined", "rejected", "4"}
+    paid = {"paid", "success", "successful", "completed", "confirm", "confirmed", "1", "2"}
+    pending = {"new", "created", "pending", "wait", "waiting", "processing", "process", "0"}
+    canceled = {"canceled", "cancelled", "cancel", "aborted", "void", "9", "3"}
+    failed = {"failed", "fail", "error", "declined", "rejected", "8", "4"}
     for raw in candidates:
         if raw is None:
             continue
@@ -368,6 +379,7 @@ async def _reconcile_pending_freekassa(db) -> None:
                 payment_id=int(payment["id"]),
             )
             if data.get("error"):
+                logger.warning("FreeKassa poll error payment_id=%s: %s", payment["id"], data.get("error"))
                 continue
             status = _fk_status_from_data(data)
             if status == "paid":
@@ -384,6 +396,7 @@ async def _reconcile_pending_freekassa(db) -> None:
                     provider_payment_id=f"freekassa:{payment['id']}",
                 )
         except Exception:
+            logger.exception("FreeKassa reconcile failed payment_id=%s", payment["id"])
             continue
     runtime.last_freekassa_reconcile_ts = time.time()
 

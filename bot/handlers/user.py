@@ -45,9 +45,9 @@ from bot.services.freekassa import create_order
 from bot.services.rate_limit import is_allowed
 
 FREEKASSA_METHOD_RULES = {
-    44: {"percent": 7.0, "min_fee": 10.0, "min_amount": 0},   # СБП
-    36: {"percent": 8.0, "min_fee": 50.0, "min_amount": 50},  # Карта
-    43: {"percent": 8.0, "min_fee": 10.0, "min_amount": 0},   # SberPay
+    44: {"percent": 7.0, "min_amount": 10},   # СБП
+    36: {"percent": 8.0, "min_amount": 50},   # Карта
+    43: {"percent": 8.0, "min_amount": 10},   # SberPay
 }
 FREEKASSA_METHOD_OPTIONS = [
     {"key": "sbp_qr", "value": 44, "label": "СБП QR (НСПК)"},
@@ -183,9 +183,11 @@ async def _freekassa_method_flags(db) -> tuple[bool, bool, bool]:
 
 
 def _fk_has_method_for_amount(amount: int, enable_44: bool, enable_36: bool, enable_43: bool) -> bool:
-    if enable_44 or enable_43:
+    if enable_44 and amount >= FREEKASSA_METHOD_RULES[44]["min_amount"]:
         return True
-    if enable_36 and amount >= 50:
+    if enable_43 and amount >= FREEKASSA_METHOD_RULES[43]["min_amount"]:
+        return True
+    if enable_36 and amount >= FREEKASSA_METHOD_RULES[36]["min_amount"]:
         return True
     return False
 
@@ -342,7 +344,7 @@ def _parse_date(value: str | None) -> datetime.date | None:
 
 def _fk_fee_amount(amount: int, method: int) -> str:
     rule = FREEKASSA_METHOD_RULES.get(method, FREEKASSA_METHOD_RULES[43])
-    fee = max(amount * (rule["percent"] / 100.0), rule["min_fee"])
+    fee = amount * (rule["percent"] / 100.0)
     total = amount + fee
     return f"{total:.2f}".rstrip("0").rstrip(".")
 
@@ -1053,7 +1055,8 @@ async def topup_method_select(call: CallbackQuery, state: FSMContext) -> None:
             if not _fk_has_method_for_amount(int(rub), enable_44, enable_36, enable_43):
                 await _safe_edit(
                     call,
-                    f"{header}\n\nДля оплаты картой минимальная сумма пополнения 50 ₽.\nВведите сумму от 50 ₽.",
+                    f"{header}\n\nСумма слишком маленькая для доступных методов FreeKassa.\n"
+                    "Минимум: 10 ₽ (СБП/SberPay) или 50 ₽ (карта).",
                     reply_markup=back_main_kb(),
                 )
                 await state.set_state(UserStates.waiting_topup_amount)
@@ -1153,7 +1156,8 @@ async def topup_recommend_days(call: CallbackQuery, state: FSMContext) -> None:
             if not _fk_has_method_for_amount(need, enable_44, enable_36, enable_43):
                 await _safe_edit(
                     call,
-                    f"{header}\n\nДля оплаты картой минимальная сумма пополнения 50 ₽.\n"
+                    f"{header}\n\nСумма слишком маленькая для доступных методов FreeKassa.\n"
+                    "Минимум: 10 ₽ (СБП/SberPay) или 50 ₽ (карта).\n"
                     "Увеличьте сумму или включите другой метод в админке.",
                     reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
                 )
@@ -1268,10 +1272,10 @@ async def freekassa_pay(call: CallbackQuery, state: FSMContext) -> None:
                 ),
             )
             return
-        if method_value == 36 and rub_value < 50:
+        if method_value == 43 and not enable_43:
             await _safe_edit(
                 call,
-                "Для оплаты картой минимальная сумма пополнения 50 ₽.",
+                "SberPay отключён в настройках.",
                 reply_markup=freekassa_method_kb(
                     rub_value,
                     enable_44,
@@ -1280,10 +1284,11 @@ async def freekassa_pay(call: CallbackQuery, state: FSMContext) -> None:
                 ),
             )
             return
-        if method_value == 43 and not enable_43:
+        min_amount = int(FREEKASSA_METHOD_RULES.get(method_value, {}).get("min_amount", 0))
+        if rub_value < min_amount:
             await _safe_edit(
                 call,
-                "SberPay отключён в настройках.",
+                f"Для выбранного метода минимальная сумма пополнения {min_amount} ₽.",
                 reply_markup=freekassa_method_kb(
                     rub_value,
                     enable_44,
@@ -1392,7 +1397,8 @@ async def topup_quick_amount(call: CallbackQuery, state: FSMContext) -> None:
             if not _fk_has_method_for_amount(rub, enable_44, enable_36, enable_43):
                 await _safe_edit(
                     call,
-                    "Для оплаты картой минимальная сумма пополнения 50 ₽.",
+                    "Сумма слишком маленькая для доступных методов FreeKassa.\n"
+                    "Минимум: 10 ₽ (СБП/SberPay) или 50 ₽ (карта).",
                     reply_markup=back_main_kb(),
                 )
                 await state.set_state(UserStates.waiting_topup_amount)
@@ -1491,7 +1497,8 @@ async def topup_days(call: CallbackQuery, state: FSMContext) -> None:
             if not _fk_has_method_for_amount(need, enable_44, enable_36, enable_43):
                 await _safe_edit(
                     call,
-                    f"{header}\n\n{note}\nДля оплаты картой минимальная сумма пополнения 50 ₽.",
+                    f"{header}\n\n{note}\nСумма слишком маленькая для доступных методов FreeKassa.\n"
+                    "Минимум: 10 ₽ (СБП/SberPay) или 50 ₽ (карта).",
                     reply_markup=main_menu_inline_kb(_is_admin(call.from_user.id)),
                 )
                 return
@@ -1617,7 +1624,8 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
                 await _send_or_edit_main_message(
                     message,
                     db,
-                    f"{header}\n\nДля оплаты картой минимальная сумма пополнения 50 ₽.\nВведите сумму от 50 ₽.",
+                    f"{header}\n\nСумма слишком маленькая для доступных методов FreeKassa.\n"
+                    "Минимум: 10 ₽ (СБП/SberPay) или 50 ₽ (карта).",
                     reply_markup=back_main_kb(),
                 )
                 await state.set_state(UserStates.waiting_topup_amount)
