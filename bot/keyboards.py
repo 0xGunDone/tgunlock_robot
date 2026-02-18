@@ -548,50 +548,63 @@ def topup_recommend_days_kb() -> InlineKeyboardMarkup:
     )
 
 
+def _fk_fee_total(amount: int, method_id: int) -> float:
+    if method_id == 44:  # SBP
+        percent = 7.0
+        min_fee = 10.0
+    elif method_id == 36:  # Card
+        percent = 8.0
+        min_fee = 50.0
+    else:  # 43 SberPay
+        percent = 8.0
+        min_fee = 10.0
+    fee = max(amount * (percent / 100.0), min_fee)
+    return amount + fee
+
+
+def _fmt_money(value: float) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
 def freekassa_method_kb(
     amount: int,
-    fee_percent: float = 12.5,
     enable_44: bool = True,
     enable_36: bool = True,
     enable_43: bool = True,
 ) -> InlineKeyboardMarkup:
-    total = amount * (1 + fee_percent / 100)
-    total_str = f"{total:.2f}".rstrip("0").rstrip(".")
     buttons = []
     if enable_44:
+        total_44 = _fmt_money(_fk_fee_total(amount, 44))
         buttons.append(
-            [_btn(f"СБП QR (НСПК) — {total_str} ₽", callback_data="fk:pay:44", style=STYLE_PRIMARY)]
+            [_btn(f"СБП QR (НСПК) — {total_44} ₽", callback_data="fk:pay:44", style=STYLE_PRIMARY)]
         )
-    if enable_36:
+    if enable_36 and amount >= 50:
+        total_36 = _fmt_money(_fk_fee_total(amount, 36))
         buttons.append(
-            [_btn(f"Банковская карта РФ — {total_str} ₽", callback_data="fk:pay:36", style=STYLE_PRIMARY)]
+            [_btn(f"Банковская карта РФ — {total_36} ₽", callback_data="fk:pay:36", style=STYLE_PRIMARY)]
         )
     if enable_43:
+        total_43 = _fmt_money(_fk_fee_total(amount, 43))
         buttons.append(
-            [_btn(f"СберPay — {total_str} ₽", callback_data="fk:pay:43", style=STYLE_PRIMARY)]
+            [_btn(f"СберPay — {total_43} ₽", callback_data="fk:pay:43", style=STYLE_PRIMARY)]
         )
     buttons.append([_btn("⬅️ Назад", callback_data="fk:amounts_back", style=STYLE_DANGER)])
     buttons.append([_btn("⬅️ В главное меню", callback_data="menu:main", style=STYLE_DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def freekassa_amount_kb(fee_percent: float = 12.5) -> InlineKeyboardMarkup:
-    def label(amount: int) -> str:
-        fee = amount * (1 + fee_percent / 100)
-        fee_str = f"{fee:.2f}".rstrip("0").rstrip(".")
-        return f"{amount} ₽ ({fee_str} ₽)"
-
+def freekassa_amount_kb() -> InlineKeyboardMarkup:
     buttons = [
         [_btn("📅 На 7 дней", callback_data="topup:days:freekassa:7", style=STYLE_PRIMARY)],
         [
-            _btn(label(100), callback_data="topup:amount:freekassa:100", style=STYLE_SUCCESS),
-            _btn(label(300), callback_data="topup:amount:freekassa:300", style=STYLE_SUCCESS),
-            _btn(label(500), callback_data="topup:amount:freekassa:500", style=STYLE_SUCCESS),
+            _btn("100 ₽", callback_data="topup:amount:freekassa:100", style=STYLE_SUCCESS),
+            _btn("300 ₽", callback_data="topup:amount:freekassa:300", style=STYLE_SUCCESS),
+            _btn("500 ₽", callback_data="topup:amount:freekassa:500", style=STYLE_SUCCESS),
         ],
         [
-            _btn(label(1000), callback_data="topup:amount:freekassa:1000", style=STYLE_SUCCESS),
-            _btn(label(2000), callback_data="topup:amount:freekassa:2000", style=STYLE_SUCCESS),
-            _btn(label(5000), callback_data="topup:amount:freekassa:5000", style=STYLE_SUCCESS),
+            _btn("1000 ₽", callback_data="topup:amount:freekassa:1000", style=STYLE_SUCCESS),
+            _btn("2000 ₽", callback_data="topup:amount:freekassa:2000", style=STYLE_SUCCESS),
+            _btn("5000 ₽", callback_data="topup:amount:freekassa:5000", style=STYLE_SUCCESS),
         ],
         [_btn("✍️ Ввести сумму", callback_data="topup:custom:freekassa", style=STYLE_PRIMARY)],
         [_btn("⬅️ К способам оплаты", callback_data="menu:topup", style=STYLE_DANGER)],
@@ -624,7 +637,6 @@ def topup_quick_kb(method: str, show_method_back: bool = False) -> InlineKeyboar
 def freekassa_pay_kb(payment_id: int, pay_url: str) -> InlineKeyboardMarkup:
     buttons = [
         [_btn("✅ Оплатить", url=pay_url, style=STYLE_SUCCESS)],
-        [_btn("🔄 Проверить оплату", callback_data=f"fk:check:{payment_id}", style=STYLE_PRIMARY)],
         [_btn("❌ Отменить", callback_data=f"fk:cancel:{payment_id}", style=STYLE_DANGER)],
         [_btn("⬅️ Назад", callback_data="menu:topup", style=STYLE_DANGER)],
     ]

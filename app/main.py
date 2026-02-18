@@ -20,7 +20,7 @@ from bot.services.mtproto import sync_mtproto_secrets, reenable_proxies_for_user
 from bot.ui import send_bg_to_user
 from bot.services.settings import get_int_setting
 from bot.keyboards import main_menu_inline_kb
-from bot.services.freekassa import verify_notification, amount_matches, get_order_status
+from bot.services.freekassa import verify_notification, get_order_status
 from fastapi.responses import PlainTextResponse
 
 config = load_config()
@@ -76,8 +76,6 @@ FREEKASSA_PATH = f"{APP_PREFIX}/freekassa" if APP_PREFIX else "/freekassa"
 
 app = FastAPI()
 
-FREEKASSA_FEE_PERCENT = 12.5
-
 
 async def _build_user_header(db, user_row) -> str:
     if not user_row:
@@ -96,22 +94,52 @@ async def _build_user_header(db, user_row) -> str:
     )
 
 
-def _fk_paid(data: dict) -> bool:
+def _fk_status_from_data(data: dict) -> str:
     if not data:
-        return False
+        return "unknown"
     candidates = [
         data.get("status"),
         (data.get("order") or {}).get("status") if isinstance(data.get("order"), dict) else None,
         data.get("state"),
         data.get("paymentStatus"),
     ]
+    paid = {"paid", "success", "successful", "completed", "confirm", "confirmed", "2"}
+    pending = {"new", "created", "pending", "wait", "waiting", "processing", "process", "0", "1"}
+    canceled = {"canceled", "cancelled", "cancel", "aborted", "void", "3"}
+    failed = {"failed", "fail", "error", "declined", "rejected", "4"}
     for raw in candidates:
         if raw is None:
             continue
         value = str(raw).strip().lower()
-        if value in {"paid", "success", "successful", "completed", "confirm", "confirmed", "2"}:
-            return True
-    return False
+        if value in paid:
+            return "paid"
+        if value in canceled:
+            return "canceled"
+        if value in failed:
+            return "failed"
+        if value in pending:
+            return "pending"
+    return "unknown"
+
+
+async def _send_payment_status_message(
+    db,
+    payment,
+    text: str,
+) -> None:
+    user = await dao.get_user_by_id(db, payment["user_id"])
+    if not user:
+        return
+    is_admin = user["tg_id"] in (runtime.config.admin_tg_ids if runtime.config else [])
+    try:
+        await bot.send_message(
+            user["tg_id"],
+            text,
+            reply_markup=main_menu_inline_kb(is_admin),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        pass
 
 
 async def _credit_payment_and_notify(
@@ -133,25 +161,35 @@ async def _credit_payment_and_notify(
         await sync_mtproto_secrets(db)
 
     user = await dao.get_user_by_id(db, payment["user_id"])
-    if not user:
-        return
     header = await _build_user_header(db, user)
     text = (
-        f"{header}\n\nБаланс пополнен на {payment['amount']} ₽.\nПрокси снова активны."
-        if reenabled
-        else f"{header}\n\nБаланс пополнен на {payment['amount']} ₽."
+        f"✅ Платёж #{payment['id']}: оплачен.\n"
+        f"Баланс пополнен на {payment['amount']} ₽.\n"
+        f"{header}\n"
+        f"{'Прокси снова активны.' if reenabled else 'Статус: paid.'}"
     )
-    try:
-        is_admin = user["tg_id"] in (runtime.config.admin_tg_ids if runtime.config else [])
-        await send_bg_to_user(
-            bot,
-            db,
-            user,
-            text,
-            reply_markup=main_menu_inline_kb(is_admin),
-        )
-    except Exception:
-        pass
+    await _send_payment_status_message(db, payment, text)
+
+
+async def _set_payment_status_and_notify(
+    db,
+    payment,
+    status: str,
+    provider_payment_id: str,
+) -> None:
+    if payment["status"] == status:
+        return
+    await dao.update_payment_status(
+        db,
+        payment["id"],
+        status,
+        provider_payment_id=provider_payment_id,
+    )
+    status_text = {
+        "failed": "❌ Платёж #{id}: отклонён.\nСтатус: failed.",
+        "canceled": "⚪️ Платёж #{id}: отменён провайдером.\nСтатус: canceled.",
+    }.get(status, "Платёж #{id}: статус обновлён.")
+    await _send_payment_status_message(db, payment, status_text.format(id=payment["id"]))
 
 
 @app.on_event("startup")
@@ -258,12 +296,6 @@ async def freekassa_webhook(request: Request) -> Response:
             return PlainTextResponse("NO", status_code=404)
         if payment["status"] == "paid":
             return PlainTextResponse("YES")
-        if not amount_matches(payment["amount"], amount, FREEKASSA_FEE_PERCENT):
-            await dao.update_payment_status(
-                db, payment_id, "failed", provider_payment_id=f"freekassa:{payment_id}"
-            )
-            return PlainTextResponse("NO", status_code=400)
-
         await _credit_payment_and_notify(db, payment, provider_payment_id=f"freekassa:{payment_id}")
     finally:
         await db.close()
@@ -337,13 +369,20 @@ async def _reconcile_pending_freekassa(db) -> None:
             )
             if data.get("error"):
                 continue
-            if not _fk_paid(data):
-                continue
-            await _credit_payment_and_notify(
-                db,
-                payment,
-                provider_payment_id=f"freekassa:{payment['id']}",
-            )
+            status = _fk_status_from_data(data)
+            if status == "paid":
+                await _credit_payment_and_notify(
+                    db,
+                    payment,
+                    provider_payment_id=f"freekassa:{payment['id']}",
+                )
+            elif status in {"failed", "canceled"}:
+                await _set_payment_status_and_notify(
+                    db,
+                    payment,
+                    status,
+                    provider_payment_id=f"freekassa:{payment['id']}",
+                )
         except Exception:
             continue
     runtime.last_freekassa_reconcile_ts = time.time()

@@ -22,7 +22,7 @@ pip install -r requirements.txt
 - `FREEKASSA_SECRET_WORD_2` (секретное слово №2, для webhook)
 - `FREEKASSA_API_BASE` (по умолчанию `https://api.fk.life/v1`)
 - `FREEKASSA_IP` (IP клиента; можно указать IP сервера)
-- `FREEKASSA_RECONCILE_INTERVAL_SEC` (фоновая сверка pending-платежей, по умолчанию `180`)
+- `FREEKASSA_RECONCILE_INTERVAL_SEC` (фоновая сверка pending-платежей, по умолчанию `30`)
 - `MTPROXY_RESTART_COOLDOWN_SEC` (защита от частых рестартов MTProxy, по умолчанию `30`)
 - `RATE_LIMIT_START_PER_MIN` (лимит `/start` на пользователя в минуту, по умолчанию `10`)
 - `RATE_LIMIT_TOPUP_PER_MIN` (лимит действий пополнения, по умолчанию `20`)
@@ -131,5 +131,5 @@ policy_url https://example.com/policy
 
 - Поддержка работает по статусам тикета: `waiting_admin`, `waiting_user`, `closed`.
 - Тикет можно закрыть админом или самим пользователем.
-- Для FreeKassa добавлена кнопка `Проверить оплату`.
-- В фоне работает сверка `pending` платежей, если webhook задержался.
+- Для FreeKassa проверка идёт фоновым опросом API (polling).
+- Пользователь получает отдельные сообщения по статусам платежа (`pending/paid/failed/canceled`).
